@@ -1,0 +1,29 @@
+
+# ==========================================
+# StockGuard - Archivos ignorados por Git
+# ==========================================
+
+# Archivos generados por Maven
+target/
+
+# Configuración local de los IDE
+.vscode/
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+
+# Archivos de registro y temporales
+*.log
+*.tmp
+*.bak
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos compilados fuera de Maven
+*.class
+
+.env
