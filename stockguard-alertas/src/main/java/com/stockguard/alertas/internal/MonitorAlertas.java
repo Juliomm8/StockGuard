@@ -13,10 +13,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /**
  * Monitor de existencias bajas.
@@ -35,8 +37,22 @@ public class MonitorAlertas {
 
     private final AtomicReference<InventarioService> inventarioService =
             new AtomicReference<>();
+    private final Supplier<ScheduledExecutorService> programadorFactory;
 
     private volatile ScheduledExecutorService programador;
+
+    public MonitorAlertas() {
+        this(MonitorAlertas::crearProgramador);
+    }
+
+    MonitorAlertas(
+            Supplier<ScheduledExecutorService> programadorFactory
+    ) {
+        this.programadorFactory = Objects.requireNonNull(
+                programadorFactory,
+                "La fábrica del programador es obligatoria"
+        );
+    }
 
     /**
      * OSGi invoca este método cuando encuentra el servicio.
@@ -70,15 +86,9 @@ public class MonitorAlertas {
     @Activate
     void activar() {
         ScheduledExecutorService nuevoProgramador =
-                Executors.newSingleThreadScheduledExecutor(
-                        tarea -> {
-                            Thread hilo = new Thread(
-                                    tarea,
-                                    "stockguard-monitor-alertas"
-                            );
-                            hilo.setDaemon(true);
-                            return hilo;
-                        }
+                Objects.requireNonNull(
+                        programadorFactory.get(),
+                        "La fábrica debe crear un programador"
                 );
         programador = nuevoProgramador;
 
@@ -94,6 +104,19 @@ public class MonitorAlertas {
                 + "y umbral de stock menor que {}.",
                 INTERVALO_REVISION_SEGUNDOS,
                 UMBRAL_STOCK
+        );
+    }
+
+    private static ScheduledExecutorService crearProgramador() {
+        return Executors.newSingleThreadScheduledExecutor(
+                tarea -> {
+                    Thread hilo = new Thread(
+                            tarea,
+                            "stockguard-monitor-alertas"
+                    );
+                    hilo.setDaemon(true);
+                    return hilo;
+                }
         );
     }
 
