@@ -33,6 +33,13 @@
             <version>1.5.1</version>
             <scope>provided</scope>
         </dependency>
+        <!-- API de logging provista por Apache Karaf -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>1.7.36</version>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -48,6 +55,10 @@
                         <Bundle-SymbolicName>
                             com.stockguard.alertas
                         </Bundle-SymbolicName>
+
+                        <Import-Package>
+                            com.stockguard.inventario.api;version="[1.0,2)",*
+                        </Import-Package>
 
                         <Private-Package>
                             com.stockguard.alertas.internal*
