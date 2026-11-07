@@ -1,0 +1,12 @@
+StockGuard — compilación del reactor Maven
+Comando: mvn clean verify
+Extracto literal de la salida real de Maven:
+
+[INFO] Reactor Build Order:
+[INFO] StockGuard - Sistema Modular de Inventario                         [pom]
+[INFO] StockGuard - Bundle de Inventario                               [bundle]
+[INFO] StockGuard - Bundle de Alertas                                  [bundle]
+[INFO] StockGuard - Sistema Modular de Inventario ......... SUCCESS [  0.081 s]
+[INFO] StockGuard - Bundle de Inventario .................. SUCCESS [  2.210 s]
+[INFO] StockGuard - Bundle de Alertas ..................... SUCCESS [  1.792 s]
+[INFO] BUILD SUCCESS

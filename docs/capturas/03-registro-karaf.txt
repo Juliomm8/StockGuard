@@ -1,0 +1,14 @@
+StockGuard — evidencia textual del registro de Apache Karaf
+Fuente: data/log/karaf.log de la instalación local de Karaf 4.4.12 indicada para esta tarea.
+Entradas extraídas literalmente y decodificadas como Windows-1252 para conservar acentos.
+El par de desconexión y reconexión es historial anterior conservado por el runtime; no se provocó durante esta tarea.
+
+Historial de desconexión y reconexión:
+2026-11-07T01:20:41,328 | INFO  | pipe-bundle:stop 57 | MonitorAlertas                   | 58 - com.stockguard.alertas - 1.0.0.SNAPSHOT | Servicio de Inventario desconectado. El monitor continuará esperando la reconexión.
+2026-11-07T01:31:09,830 | INFO  | pipe-bundle:start 57 | MonitorAlertas                   | 58 - com.stockguard.alertas - 1.0.0.SNAPSHOT | Servicio de Inventario conectado.
+
+Ciclo de alertas del monitor observado durante esta tarea (2026-11-07T17:25:38,636):
+2026-11-07T17:25:38,636 | WARN  | stockguard-monitor-alertas | MonitorAlertas                   | 58 - com.stockguard.alertas - 1.0.0.SNAPSHOT | ALERTA: Mouse inalámbrico Logitech (P-002) tiene 3 unidades disponibles; el umbral es menor que 5.
+2026-11-07T17:25:38,636 | WARN  | stockguard-monitor-alertas | MonitorAlertas                   | 58 - com.stockguard.alertas - 1.0.0.SNAPSHOT | ALERTA: Cable HDMI 2 metros (P-004) tiene 1 unidades disponibles; el umbral es menor que 5.
+2026-11-07T17:25:38,636 | WARN  | stockguard-monitor-alertas | MonitorAlertas                   | 58 - com.stockguard.alertas - 1.0.0.SNAPSHOT | ALERTA: Audífonos HyperX Cloud (P-007) tiene 4 unidades disponibles; el umbral es menor que 5.
+2026-11-07T17:25:38,636 | WARN  | stockguard-monitor-alertas | MonitorAlertas                   | 58 - com.stockguard.alertas - 1.0.0.SNAPSHOT | ALERTA: Adaptador USB-C (P-009) tiene 2 unidades disponibles; el umbral es menor que 5.

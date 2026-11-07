@@ -310,9 +310,23 @@ JUnit 5 proporciona las aserciones y el ciclo de ejecución de las pruebas. Mock
 
 Estas pruebas son unitarias: ejercitan componentes Java y sus contratos. La instalación de bundles, la publicación efectiva del servicio en el registro y el comportamiento del contenedor son verificaciones de integración que se realizan en Karaf. Los resultados manuales previos descritos arriba no deben confundirse con la ejecución de Surefire.
 
-## Evidencias visuales
+## Evidencias de ejecución
 
-Las capturas aún no están adjuntas. Esta lista sirve como guía para incorporarlas cuando estén disponibles; no se incluyen imágenes ficticias ni enlaces a archivos inexistentes.
+En esta sesión no fue posible guardar capturas de escritorio: la herramienta de captura devolvió una ventana distinta a VS Code y, al reintentar, no mostró el editor. No se crearon imágenes simuladas; los diez puntos visuales permanecen pendientes.
+
+### Evidencia textual disponible
+
+Se guardaron extractos de ejecuciones reales en `docs/capturas/`:
+
+- [Pruebas automatizadas de Maven](docs/capturas/01-pruebas-automatizadas.txt): salida con 9 pruebas de Inventario y 9 de Alertas, sin fallos, errores ni omisiones.
+- [Resultado del reactor Maven](docs/capturas/02-build-success.txt): módulos construidos y `BUILD SUCCESS`.
+- [Registro de alertas de Karaf](docs/capturas/03-registro-karaf.txt): cuatro alertas del ciclo observado mientras el monitor seguía ejecutándose. También conserva eventos anteriores de desconexión y reconexión, marcados como historial y no como una demostración repetida durante esta tarea.
+
+El runtime Karaf ya estaba ejecutándose y su registro mostró consultas del monitor. No se pudo consultar `bundle:list` ni `bundle:services` en esta sesión: el cliente SSH local solicitó un usuario, así que se canceló sin ingresar credenciales. Tampoco se detuvieron ni iniciaron bundles. Por eso, los estados actuales y la secuencia de recuperación no se presentan como verificaciones nuevas.
+
+### Capturas de pantalla pendientes
+
+Las capturas PNG se podrán incorporar cuando sea posible obtener una captura dirigida del terminal de Maven y de la consola Karaf. No hay enlaces de imagen hasta que esos archivos existan y se revisen.
 
 - [ ] Salida de Maven con `BUILD SUCCESS`.
 - [ ] Resumen de pruebas automatizadas aprobadas.
