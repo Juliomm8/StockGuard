@@ -312,32 +312,61 @@ Estas pruebas son unitarias: ejercitan componentes Java y sus contratos. La inst
 
 ## Evidencias de ejecución
 
-En esta sesión no fue posible guardar capturas de escritorio: la herramienta de captura devolvió una ventana distinta a VS Code y, al reintentar, no mostró el editor. No se crearon imágenes simuladas; los diez puntos visuales permanecen pendientes.
+Las imágenes siguientes son capturas PNG de la pantalla real de VS Code y su terminal integrado. Las ejecuciones de Maven se realizaron en PowerShell; las consultas de bundles, servicios y registros se realizaron en la consola local de Apache Karaf 4.4.12. Cada imagen conserva la salida visible de su ejecución.
 
-### Evidencia textual disponible
+### Compilación y pruebas
 
-Se guardaron extractos de ejecuciones reales en `docs/capturas/`:
+La primera captura muestra los informes Surefire de Inventario y Alertas: 9 pruebas en cada módulo, sin fallos, errores ni omisiones.
 
-- [Pruebas automatizadas de Maven](docs/capturas/01-pruebas-automatizadas.txt): salida con 9 pruebas de Inventario y 9 de Alertas, sin fallos, errores ni omisiones.
-- [Resultado del reactor Maven](docs/capturas/02-build-success.txt): módulos construidos y `BUILD SUCCESS`.
-- [Registro de alertas de Karaf](docs/capturas/03-registro-karaf.txt): cuatro alertas del ciclo observado mientras el monitor seguía ejecutándose. También conserva eventos anteriores de desconexión y reconexión, marcados como historial y no como una demostración repetida durante esta tarea.
+![Informes de pruebas de Inventario y Alertas con 9 pruebas aprobadas en cada módulo](docs/capturas/01-pruebas-automatizadas.png)
 
-El runtime Karaf ya estaba ejecutándose y su registro mostró consultas del monitor. No se pudo consultar `bundle:list` ni `bundle:services` en esta sesión: el cliente SSH local solicitó un usuario, así que se canceló sin ingresar credenciales. Tampoco se detuvieron ni iniciaron bundles. Por eso, los estados actuales y la secuencia de recuperación no se presentan como verificaciones nuevas.
+La segunda captura muestra la salida de `mvn clean verify`, el resumen satisfactorio de los tres proyectos del reactor y `BUILD SUCCESS`.
 
-### Capturas de pantalla pendientes
+![Resumen de Maven con Inventario, Alertas y el agregador en SUCCESS](docs/capturas/02-build-success.png)
 
-Las capturas PNG se podrán incorporar cuando sea posible obtener una captura dirigida del terminal de Maven y de la consola Karaf. No hay enlaces de imagen hasta que esos archivos existan y se revisen.
+### Bundles y servicio OSGi
 
-- [ ] Salida de Maven con `BUILD SUCCESS`.
-- [ ] Resumen de pruebas automatizadas aprobadas.
-- [ ] Ambos bundles en estado `Active` en Karaf.
-- [ ] Servicio `InventarioService` registrado.
-- [ ] Alertas iniciales de los cuatro productos bajo el umbral.
-- [ ] Inventario detenido mientras Alertas permanece `Active`.
-- [ ] Mensaje de desconexión del servicio de Inventario.
-- [ ] Mensaje de reconexión después de iniciar Inventario.
-- [ ] Alertas de stock después de la recuperación.
-- [ ] Evidencia de los cuatro productos con bajo stock en el catálogo de 15 productos.
+Después de la demostración de ciclo de vida, se confirmó que Inventario y Alertas quedaron activos. En esta ejecución Karaf asignó los ID 57 y 58, respectivamente; los identificadores pueden variar entre instalaciones.
+
+![Bundles StockGuard de Inventario y Alertas en estado Active](docs/capturas/03-bundles-activos.png)
+
+El servicio público volvió a aparecer en el registro después de iniciar Inventario.
+
+![El bundle Inventario publica com.stockguard.inventario.api.InventarioService](docs/capturas/04-servicio-osgi.png)
+
+### Alertas por existencias bajas
+
+Los registros muestran alertas para los cuatro productos con menos de cinco unidades: P-002, P-004, P-007 y P-009. La salida de la consola presenta algunos caracteres acentuados sustituidos por el juego de caracteres del terminal; los códigos, nombres base y cantidades se mantienen visibles.
+
+![Registros de Karaf con alertas para los cuatro productos bajo el umbral](docs/capturas/05-alertas-stock.png)
+
+### Desconexión y recuperación del servicio
+
+Al detener Inventario, `bundle:list` muestra el bundle 57 como `Resolved` y Alertas (58) como `Active`.
+
+![Inventario en Resolved mientras Alertas continúa Active](docs/capturas/06-inventario-detenido.png)
+
+El registro confirma que el monitor detectó la retirada del servicio y quedó a la espera de su regreso.
+
+![Mensaje de desconexión de Inventario detectado por el monitor](docs/capturas/07-desconexion-servicio.png)
+
+Después de iniciar Inventario, el registro confirma la reconexión y muestra alertas producidas por las consultas posteriores.
+
+![Mensaje de reconexión del servicio Inventario en Karaf](docs/capturas/08-reconexion-servicio.png)
+
+La siguiente captura muestra nuevos ciclos de alertas después de la reconexión automática.
+
+![Alertas de stock bajo registradas después de recuperar Inventario](docs/capturas/09-alertas-recuperadas.png)
+
+La captura 05 también sirve como evidencia de los cuatro productos bajo stock del catálogo inicial. No se creó una imagen duplicada para ese punto.
+
+### Evidencia textual complementaria
+
+Se conservan los extractos de texto de ejecuciones anteriores en `docs/capturas/`:
+
+- [Pruebas automatizadas de Maven](docs/capturas/01-pruebas-automatizadas.txt).
+- [Resultado del reactor Maven](docs/capturas/02-build-success.txt).
+- [Registro de alertas de Karaf](docs/capturas/03-registro-karaf.txt), que incluye historial adicional de alertas y eventos del servicio.
 
 ## Limitaciones actuales
 
