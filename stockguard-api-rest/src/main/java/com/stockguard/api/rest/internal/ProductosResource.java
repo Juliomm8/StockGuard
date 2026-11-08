@@ -109,7 +109,7 @@ public class ProductosResource {
                     .toList();
             return Response.ok(productos).build();
         } catch (RuntimeException error) {
-            return manejarError("listar productos", error);
+            return manejarError(Fallo.CONSULTA, "listar productos", error);
         }
     }
 
@@ -133,7 +133,7 @@ public class ProductosResource {
                     ).build())
                     .orElseGet(this::productoNoEncontrado);
         } catch (RuntimeException error) {
-            return manejarError("buscar un producto", error);
+            return manejarError(Fallo.CONSULTA, "buscar un producto", error);
         }
     }
 
@@ -157,7 +157,7 @@ public class ProductosResource {
             }
             return Response.noContent().build();
         } catch (RuntimeException error) {
-            return manejarError("registrar una entrada", error);
+            return manejarError(Fallo.ENTRADA, "registrar una entrada", error);
         }
     }
 
@@ -181,7 +181,7 @@ public class ProductosResource {
             }
             return Response.noContent().build();
         } catch (RuntimeException error) {
-            return manejarError("registrar una salida", error);
+            return manejarError(Fallo.SALIDA, "registrar una salida", error);
         }
     }
 
@@ -205,7 +205,7 @@ public class ProductosResource {
             }
             return Response.noContent().build();
         } catch (RuntimeException error) {
-            return manejarError("ajustar existencias", error);
+            return manejarError(Fallo.AJUSTE, "ajustar existencias", error);
         }
     }
 
@@ -231,7 +231,7 @@ public class ProductosResource {
                     ).build())
                     .orElseGet(this::productoNoEncontrado);
         } catch (RuntimeException error) {
-            return manejarError("consultar movimientos", error);
+            return manejarError(Fallo.CONSULTA, "consultar movimientos", error);
         }
     }
 
@@ -271,18 +271,66 @@ public class ProductosResource {
         return codigo != null && CODIGO_VALIDO.matcher(codigo).matches();
     }
 
-    private Response manejarError(String operacion, RuntimeException error) {
+    /**
+     * Contexto en el que ocurre un fallo. Un {@link IllegalArgumentException}
+     * del servicio significa cosas distintas según la operación, por lo que no
+     * puede traducirse siempre al mismo estado HTTP.
+     */
+    private enum Fallo {
+        /** Lecturas: ningún argumento del cliente puede ser inválido aquí. */
+        CONSULTA,
+        /** El servicio rechaza la entrada si la existencia superaría el máximo. */
+        ENTRADA,
+        /** El servicio rechaza la salida si supera las existencias. */
+        SALIDA,
+        /** El servicio solo rechaza cantidades negativas, ya validadas aquí. */
+        AJUSTE
+    }
+
+    private Response manejarError(Fallo fallo, String operacion, RuntimeException error) {
         if (error instanceof InventarioNoDisponibleException) {
             LOGGER.warn("No está disponible el servicio de Inventario.", error);
             return servicioNoDisponible();
         }
         if (error instanceof IllegalArgumentException) {
-            return error(
-                    Response.Status.CONFLICT,
-                    "La operación no es compatible con las existencias actuales."
-            );
+            switch (fallo) {
+                case ENTRADA -> {
+                    LOGGER.warn("Entrada rechazada por Inventario: {}", error.getMessage());
+                    return error(
+                            Response.Status.CONFLICT,
+                            "La entrada supera la cantidad máxima que admite el inventario."
+                    );
+                }
+                case SALIDA -> {
+                    LOGGER.warn("Salida rechazada por Inventario: {}", error.getMessage());
+                    return error(
+                            Response.Status.CONFLICT,
+                            "La salida supera las existencias disponibles del producto."
+                    );
+                }
+                case AJUSTE -> {
+                    // La cantidad ya se validó al recibir la solicitud: si
+                    // Inventario aun así la rechaza, el dato es inválido.
+                    LOGGER.warn("Ajuste rechazado por Inventario: {}", error.getMessage());
+                    return error(
+                            Response.Status.BAD_REQUEST,
+                            "La cantidad indicada no es válida para el ajuste."
+                    );
+                }
+                default -> {
+                    // Un dato persistido que no se puede interpretar (por
+                    // ejemplo, un tipo de movimiento desconocido) no es un
+                    // conflicto de negocio: se trata como fallo interno.
+                    LOGGER.error("Inconsistencia interna al {}.", operacion, error);
+                    return errorInterno();
+                }
+            }
         }
         LOGGER.error("No fue posible {}.", operacion, error);
+        return errorInterno();
+    }
+
+    private Response errorInterno() {
         return error(
                 Response.Status.INTERNAL_SERVER_ERROR,
                 "No fue posible procesar la solicitud."

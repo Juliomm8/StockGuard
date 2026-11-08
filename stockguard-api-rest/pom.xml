@@ -82,7 +82,7 @@
             <groupId>com.fasterxml.jackson.jaxrs</groupId>
             <artifactId>jackson-jaxrs-json-provider</artifactId>
             <version>${jackson.version}</version>
-            <scope>test</scope>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 
@@ -97,7 +97,7 @@
                     <instructions>
                         <Bundle-SymbolicName>com.stockguard.api.rest</Bundle-SymbolicName>
                         <Import-Package>
-                            com.stockguard.inventario.api;version="[1.0,2)",*
+                            com.stockguard.inventario.api;version="[1.2,2)",*
                         </Import-Package>
                         <Private-Package>
                             com.stockguard.api.rest.internal*

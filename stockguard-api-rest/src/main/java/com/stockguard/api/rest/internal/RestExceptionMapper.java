@@ -32,6 +32,9 @@ public class RestExceptionMapper implements ExceptionMapper<Exception> {
 
     @Override
     public Response toResponse(Exception error) {
+        if (error instanceof SolicitudInvalidaException) {
+            return respuesta(Response.Status.BAD_REQUEST, error.getMessage());
+        }
         if (error instanceof BadRequestException) {
             return respuesta(Response.Status.BAD_REQUEST,
                     "La solicitud no tiene un formato válido.");
