@@ -5,7 +5,15 @@ import com.stockguard.inventario.api.Producto;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -15,47 +23,92 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import javax.sql.DataSource;
+
+import org.postgresql.ds.PGSimpleDataSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@DisplayName("Servicio de inventario")
+@Testcontainers
+@DisplayName("Servicio persistente de inventario PostgreSQL")
 class InventarioServiceImplTest {
 
+    private static final List<Producto> CATALOGO_ESPERADO = List.of(
+            new Producto("P-001", "Teclado mecánico Logitech", 12),
+            new Producto("P-002", "Mouse inalámbrico Logitech", 3),
+            new Producto("P-003", "Monitor Samsung 24 pulgadas", 8),
+            new Producto("P-004", "Cable HDMI 2 metros", 1),
+            new Producto("P-005", "Memoria RAM Kingston 16 GB", 20),
+            new Producto("P-006", "SSD Kingston 1 TB", 14),
+            new Producto("P-007", "Audífonos HyperX Cloud", 4),
+            new Producto("P-008", "Webcam Logitech C920", 7),
+            new Producto("P-009", "Adaptador USB-C", 2),
+            new Producto("P-010", "Hub USB 3.0", 18),
+            new Producto("P-011", "Disco duro externo 2 TB", 6),
+            new Producto("P-012", "Router TP-Link Wi-Fi 6", 9),
+            new Producto("P-013", "Fuente de poder 650 W", 11),
+            new Producto("P-014", "Pasta térmica Arctic MX-4", 25),
+            new Producto("P-015", "Soporte para laptop", 5)
+    );
+
+    @Container
+    private static final PostgreSQLContainer POSTGRES =
+            new PostgreSQLContainer("postgres:16-alpine")
+                    .withDatabaseName("stockguard_test")
+                    .withUsername("stockguard_test")
+                    .withPassword("stockguard_test");
+
+    private DataSource dataSource;
+    private JdbcInventarioRepository repositorio;
     private InventarioServiceImpl inventario;
 
     @BeforeEach
-    void inicializarInventario() {
-        inventario = new InventarioServiceImpl();
-        inventario.activar();
+    void prepararInventarioAislado() throws SQLException {
+        PGSimpleDataSource fuente = new PGSimpleDataSource();
+        fuente.setURL(POSTGRES.getJdbcUrl());
+        fuente.setUser(POSTGRES.getUsername());
+        fuente.setPassword(POSTGRES.getPassword());
+        dataSource = fuente;
+        repositorio = new JdbcInventarioRepository(dataSource);
+
+        // La primera inicialización crea el esquema; las siguientes son idempotentes.
+        repositorio.inicializar(CATALOGO_ESPERADO);
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute(
+                    "DROP TRIGGER IF EXISTS rechazar_movimiento_prueba "
+                    + "ON movimientos_inventario"
+            );
+            statement.execute(
+                    "DROP FUNCTION IF EXISTS rechazar_movimiento_prueba()"
+            );
+            statement.executeUpdate("DELETE FROM movimientos_inventario");
+            statement.executeUpdate("DELETE FROM productos");
+        }
+        repositorio.inicializar(CATALOGO_ESPERADO);
+        inventario = new InventarioServiceImpl(repositorio);
     }
 
     @Test
-    @DisplayName("Carga los 15 productos iniciales con sus datos y orden")
+    @DisplayName("Conecta con una instancia real de PostgreSQL")
+    void conectaConPostgreSqlReal() throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            assertTrue(connection.isValid(2));
+            assertEquals("stockguard_test", connection.getCatalog());
+        }
+    }
+
+    @Test
+    @DisplayName("Carga el catálogo inicial completo, único y ordenado")
     void cargaCatalogoInicialCompletoEnOrden() {
         List<Producto> productos = inventario.listarProductos();
-        List<Producto> esperados = List.of(
-                new Producto("P-001", "Teclado mecánico Logitech", 12),
-                new Producto("P-002", "Mouse inalámbrico Logitech", 3),
-                new Producto("P-003", "Monitor Samsung 24 pulgadas", 8),
-                new Producto("P-004", "Cable HDMI 2 metros", 1),
-                new Producto("P-005", "Memoria RAM Kingston 16 GB", 20),
-                new Producto("P-006", "SSD Kingston 1 TB", 14),
-                new Producto("P-007", "Audífonos HyperX Cloud", 4),
-                new Producto("P-008", "Webcam Logitech C920", 7),
-                new Producto("P-009", "Adaptador USB-C", 2),
-                new Producto("P-010", "Hub USB 3.0", 18),
-                new Producto("P-011", "Disco duro externo 2 TB", 6),
-                new Producto("P-012", "Router TP-Link Wi-Fi 6", 9),
-                new Producto("P-013", "Fuente de poder 650 W", 11),
-                new Producto("P-014", "Pasta térmica Arctic MX-4", 25),
-                new Producto("P-015", "Soporte para laptop", 5)
-        );
 
         assertEquals(15, productos.size());
-        assertEquals(esperados, productos);
+        assertEquals(CATALOGO_ESPERADO, productos);
         assertEquals(
                 productos.size(),
                 productos.stream().map(Producto::codigo).distinct().count()
@@ -81,14 +134,7 @@ class InventarioServiceImplTest {
                         .filter(producto -> producto.cantidadDisponible() < 5)
                         .count()
         );
-        assertEquals(
-                5,
-                productos.stream()
-                        .filter(producto -> producto.codigo().equals("P-015"))
-                        .findFirst()
-                        .orElseThrow()
-                        .cantidadDisponible()
-        );
+        assertEquals(5, producto("P-015").cantidadDisponible());
     }
 
     @Test
@@ -152,12 +198,7 @@ class InventarioServiceImplTest {
         List<Producto> productos = inventario.listarProductos();
         assertEquals(15, productos.size());
         assertEquals(
-                productos.size(),
-                productos.stream().map(Producto::codigo).distinct().count()
-        );
-        assertEquals(
-                productos.stream()
-                        .sorted(Comparator.comparing(Producto::codigo))
+                productos.stream().sorted(Comparator.comparing(Producto::codigo))
                         .toList(),
                 productos
         );
@@ -172,7 +213,7 @@ class InventarioServiceImplTest {
     }
 
     @Test
-    @DisplayName("Permite lecturas y actualizaciones concurrentes consistentes")
+    @DisplayName("Permite lecturas y ajustes concurrentes consistentes")
     void permiteLecturasYActualizacionesConcurrentes() throws Exception {
         int iteraciones = 400;
         CountDownLatch inicio = new CountDownLatch(1);
@@ -217,7 +258,7 @@ class InventarioServiceImplTest {
 
             inicio.countDown();
             for (Future<Void> tarea : tareas) {
-                tarea.get(20, TimeUnit.SECONDS);
+                tarea.get(120, TimeUnit.SECONDS);
             }
         } finally {
             inicio.countDown();
@@ -226,10 +267,194 @@ class InventarioServiceImplTest {
         }
     }
 
+    @Test
+    @DisplayName("La inicialización repetida conserva cambios y no duplica productos")
+    void inicializacionRepetidaConservaExistenciasModificadas() {
+        assertTrue(inventario.actualizarExistencias("P-001", 7));
+
+        repositorio.inicializar(CATALOGO_ESPERADO);
+
+        assertEquals(15, inventario.listarProductos().size());
+        assertEquals(7, producto("P-001").cantidadDisponible());
+    }
+
+    @Test
+    @DisplayName("Registra entradas, salidas y ajustes con sus existencias")
+    void registraMovimientosDeInventario() throws SQLException {
+        assertTrue(inventario.registrarEntrada("P-001", 3));
+        assertTrue(inventario.registrarSalida("P-001", 2));
+        assertTrue(inventario.actualizarExistencias("P-001", 20));
+
+        assertEquals(20, producto("P-001").cantidadDisponible());
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement query = connection.prepareStatement("""
+                     SELECT tipo_movimiento, cantidad_modificada,
+                            existencia_anterior, existencia_posterior,
+                            fecha_movimiento
+                     FROM movimientos_inventario
+                     WHERE codigo_producto = ?
+                     ORDER BY id
+                     """)) {
+            query.setString(1, "P-001");
+            try (ResultSet resultados = query.executeQuery()) {
+                assertTrue(resultados.next());
+                assertEquals("ENTRADA", resultados.getString("tipo_movimiento"));
+                assertEquals(3, resultados.getInt("cantidad_modificada"));
+                assertEquals(12, resultados.getInt("existencia_anterior"));
+                assertEquals(15, resultados.getInt("existencia_posterior"));
+                assertNotNull(resultados.getTimestamp("fecha_movimiento"));
+
+                assertTrue(resultados.next());
+                assertEquals("SALIDA", resultados.getString("tipo_movimiento"));
+                assertEquals(2, resultados.getInt("cantidad_modificada"));
+                assertEquals(15, resultados.getInt("existencia_anterior"));
+                assertEquals(13, resultados.getInt("existencia_posterior"));
+
+                assertTrue(resultados.next());
+                assertEquals("AJUSTE", resultados.getString("tipo_movimiento"));
+                assertEquals(7, resultados.getInt("cantidad_modificada"));
+                assertEquals(13, resultados.getInt("existencia_anterior"));
+                assertEquals(20, resultados.getInt("existencia_posterior"));
+                assertFalse(resultados.next());
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("Rechaza movimientos inválidos y evita existencias negativas")
+    void rechazaMovimientosInvalidos() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> inventario.registrarEntrada("P-001", 0)
+        );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> inventario.registrarSalida("P-001", -1)
+        );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> inventario.registrarSalida("P-002", 4)
+        );
+
+        assertEquals(12, producto("P-001").cantidadDisponible());
+        assertEquals(3, producto("P-002").cantidadDisponible());
+    }
+
+    @Test
+    @DisplayName("Devuelve false para entradas y salidas de productos inexistentes")
+    void movimientosDeProductoInexistenteDevuelvenFalse() {
+        assertFalse(inventario.registrarEntrada("P-999", 1));
+        assertFalse(inventario.registrarSalida("P-999", 1));
+    }
+
+    @Test
+    @DisplayName("Revierte la actualización si falla el registro del movimiento")
+    void revierteTransaccionSiFallaElMovimiento() throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE FUNCTION rechazar_movimiento_prueba()
+                    RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN
+                        RAISE EXCEPTION 'fallo de prueba';
+                    END;
+                    $$
+                    """);
+            statement.execute("""
+                    CREATE TRIGGER rechazar_movimiento_prueba
+                    BEFORE INSERT ON movimientos_inventario
+                    FOR EACH ROW EXECUTE FUNCTION rechazar_movimiento_prueba()
+                    """);
+        }
+
+        assertThrows(
+                InventarioPersistenceException.class,
+                () -> inventario.registrarEntrada("P-001", 2)
+        );
+
+        assertEquals(12, producto("P-001").cantidadDisponible());
+        assertEquals(0, cantidadMovimientos("P-001"));
+    }
+
+    @Test
+    @DisplayName("Conserva productos y existencias al recrear el componente")
+    void conservaExistenciasTrasReinicioDelComponente() {
+        assertTrue(inventario.actualizarExistencias("P-001", 8));
+
+        JdbcInventarioRepository repositorioReiniciado =
+                new JdbcInventarioRepository(dataSource);
+        repositorioReiniciado.inicializar(CATALOGO_ESPERADO);
+        InventarioServiceImpl componenteReiniciado =
+                new InventarioServiceImpl(repositorioReiniciado);
+
+        assertEquals(15, componenteReiniciado.listarProductos().size());
+        assertEquals(
+                new Producto("P-001", "Teclado mecánico Logitech", 8),
+                componenteReiniciado.listarProductos().get(0)
+        );
+    }
+
+    @Test
+    @DisplayName("Serializa entradas concurrentes sin perder actualizaciones")
+    void entradasConcurrentesSeAplicanUnaSolaVez() throws Exception {
+        int operaciones = 40;
+        CountDownLatch inicio = new CountDownLatch(1);
+        ExecutorService ejecutor = Executors.newFixedThreadPool(8);
+        List<Future<Boolean>> tareas = new ArrayList<>();
+
+        try {
+            for (int indice = 0; indice < operaciones; indice++) {
+                tareas.add(ejecutor.submit(() -> {
+                    inicio.await();
+                    return inventario.registrarEntrada("P-001", 1);
+                }));
+            }
+            inicio.countDown();
+            for (Future<Boolean> tarea : tareas) {
+                assertTrue(tarea.get(30, TimeUnit.SECONDS));
+            }
+        } finally {
+            inicio.countDown();
+            ejecutor.shutdownNow();
+            assertTrue(ejecutor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+
+        assertEquals(12 + operaciones, producto("P-001").cantidadDisponible());
+        assertEquals(operaciones, cantidadMovimientos("P-001"));
+    }
+
+    @Test
+    @DisplayName("PostgreSQL rechaza cantidades negativas a nivel de esquema")
+    void esquemaRechazaExistenciasNegativas() throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement update = connection.prepareStatement(
+                     "UPDATE productos SET cantidad_disponible = -1 "
+                     + "WHERE codigo = ?"
+             )) {
+            update.setString(1, "P-001");
+            assertThrows(SQLException.class, update::executeUpdate);
+        }
+        assertEquals(12, producto("P-001").cantidadDisponible());
+    }
+
     private Producto producto(String codigo) {
         return inventario.listarProductos().stream()
                 .filter(producto -> producto.codigo().equals(codigo))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private int cantidadMovimientos(String codigo) throws SQLException {
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement query = connection.prepareStatement(
+                     "SELECT COUNT(*) FROM movimientos_inventario "
+                     + "WHERE codigo_producto = ?"
+             )) {
+            query.setString(1, codigo);
+            try (ResultSet resultados = query.executeQuery()) {
+                assertTrue(resultados.next());
+                return resultados.getInt(1);
+            }
+        }
     }
 }

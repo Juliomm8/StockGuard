@@ -27,3 +27,5 @@ Thumbs.db
 *.class
 
 .env
+.env.*
+!.env.example

@@ -1,13 +1,13 @@
 # StockGuard — Sistema Modular de Inventario
 
-StockGuard es una aplicación de servidor de demostración para controlar el inventario de una pequeña tienda de tecnología y accesorios de computación. Mantiene un catálogo de productos en memoria y registra alertas en los registros de ejecución cuando la disponibilidad cae por debajo de cinco unidades.
+StockGuard es una aplicación de servidor de demostración para controlar el inventario de una pequeña tienda de tecnología y accesorios de computación. Persiste productos y movimientos en PostgreSQL, y registra alertas en los logs cuando la disponibilidad cae por debajo de cinco unidades.
 
 El proyecto sirve como ejemplo de una aplicación Java modular ejecutada en Apache Karaf. Sus dos bundles OSGi pueden gestionar su ciclo de vida por separado, mientras que el bundle de alertas descubre el servicio de inventario mediante el registro de servicios de OSGi.
 
 ## Funcionalidad
 
-- Cargar 15 productos de demostración al activar el componente de inventario.
-- Consultar productos ordenados por código y actualizar sus existencias.
+- Inicializar 15 productos de demostración en PostgreSQL sin duplicarlos ni sobrescribir existencias existentes.
+- Consultar productos ordenados por código, ajustar existencias y registrar entradas y salidas.
 - Revisar las existencias cada 10 segundos.
 - Registrar una alerta cuando un producto tiene menos de cinco unidades.
 - Mantener el monitor activo si Inventario deja de estar disponible y reconectarlo cuando el servicio vuelve.
@@ -16,19 +16,19 @@ El proyecto sirve como ejemplo de una aplicación Java modular ejecutada en Apac
 
 StockGuard está dividido en dos bundles de aplicación: `stockguard-inventario` contiene el contrato y la implementación del inventario; `stockguard-alertas` contiene el monitor que consulta ese contrato. El proyecto Maven de la raíz solo coordina la compilación de ambos módulos (`packaging=pom`), por lo que no genera un tercer bundle de aplicación.
 
-OSGi permite instalar, resolver, iniciar, detener y actualizar módulos dentro de un mismo entorno de ejecución. Para este ejemplo, la separación hace visible el ciclo de vida independiente entre quien ofrece los datos y quien los supervisa. No se trata de una arquitectura de microservicios distribuidos: los bundles se ejecutan en el mismo contenedor Karaf y la comunicación ocurre mediante servicios OSGi.
+OSGi permite instalar, resolver, iniciar, detener y actualizar módulos dentro de un mismo entorno de ejecución. Para este ejemplo, la separación hace visible el ciclo de vida independiente entre quien ofrece los datos y quien los supervisa. PostgreSQL se integra mediante JDBC estándar de OSGi y un controlador PostgreSQL instalado como bundle de infraestructura de terceros; no se agrega un tercer bundle de aplicación. No se trata de una arquitectura de microservicios distribuidos: los bundles se ejecutan en el mismo contenedor Karaf y la comunicación entre ellos ocurre mediante servicios OSGi.
 
 ### Registro de servicios y Declarative Services
 
-El bundle de Inventario implementa `InventarioService` y Declarative Services (DS) publica esa implementación como un servicio en el registro de servicios de OSGi (Service Registry). El registro asocia el servicio con su interfaz pública; otros componentes pueden solicitar una referencia a esa interfaz sin depender de la clase concreta.
+El bundle de Inventario implementa `InventarioService` y `InventarioMovimientosService`; Declarative Services (DS) publica ambos contratos en el registro OSGi. El registro asocia los servicios con sus interfaces públicas; otros componentes pueden solicitar una referencia sin depender de la clase concreta. Para acceder a PostgreSQL, Inventario consume `org.osgi.service.jdbc.DataSourceFactory`, que proporciona el bundle OSGi del controlador.
 
 `MonitorAlertas` declara con anotaciones DS una referencia de cardinalidad `OPTIONAL` y política `DYNAMIC`. `OPTIONAL` permite que Alertas se active aunque Inventario no esté disponible. `DYNAMIC` permite que DS notifique la llegada o retirada del servicio durante la vida del componente, sin exigir que Alertas se detenga y vuelva a iniciar. El monitor consulta el servicio cuando tiene una referencia y espera la reconexión cuando no la tiene.
 
-DS procesa las anotaciones de componentes y referencias durante la construcción del bundle y genera los descriptores de componentes OSGi. El registro de servicios administra el ciclo de vida de las referencias; no se incorpora un localizador de servicios propio a la aplicación.
+DS procesa las anotaciones de componentes y referencias durante la construcción del bundle y genera los descriptores de componentes OSGi. El componente de Inventario requiere configuración externa y el servicio JDBC. Si falta el controlador, la configuración, las credenciales o la base de datos, el componente no se activa ni publica servicios y registra el error; no sustituye PostgreSQL por almacenamiento en memoria. El registro administra las referencias; no se incorpora un localizador propio.
 
 ### Metadatos OSGi generados
 
-El manifiesto de Inventario identifica el bundle como `com.stockguard.inventario`, exporta `com.stockguard.inventario.api` con versión `1.0.0` y declara la capacidad del servicio `InventarioService`. El manifiesto de Alertas identifica `com.stockguard.alertas` e importa la API de Inventario dentro del rango `[1.0,2)`. Sus descriptores DS se empaquetan bajo `OSGI-INF/`: el descriptor de Alertas declara la referencia con cardinalidad `0..1` y política `dynamic`. La API se empaqueta en el JAR de Inventario y no se duplica en el JAR de Alertas.
+El manifiesto de Inventario identifica el bundle como `com.stockguard.inventario`, exporta `com.stockguard.inventario.api` con versión `1.1.0` y declara ambos servicios de inventario. Importa la API JDBC OSGi en alcance `provided`; el controlador no se incrusta en el JAR. Alertas importa la API de Inventario dentro del rango `[1.0,2)`. Los descriptores DS se empaquetan bajo `OSGI-INF/`: Alertas conserva su referencia `0..1` y `dynamic`, mientras que Inventario declara el requisito de `DataSourceFactory` y la configuración obligatoria.
 
 ### Diagrama de componentes
 
@@ -38,9 +38,13 @@ flowchart LR
         IMPL[InventarioServiceImpl]
         API[Contrato público InventarioService]
         IMPL -->|implementa| API
+        REPO[JdbcInventarioRepository]
+        IMPL --> REPO
     end
 
     REG[Service Registry OSGi]
+    JDBC[DataSourceFactory<br/>bundle del controlador PostgreSQL]
+    DB[(PostgreSQL)]
     subgraph ALT[Bundle stockguard-alertas]
         MON[MonitorAlertas]
     end
@@ -50,21 +54,25 @@ flowchart LR
     REG -->|referencia OPTIONAL y DYNAMIC| MON
     MON -->|consulta cada 10 segundos mediante| API
     MON -->|registra productos con stock menor que 5| ALERTA
+    JDBC -->|conexión JDBC| REPO
+    REPO -->|transacciones y consultas| DB
 ```
 
-Inventario expone el contrato y registra su implementación en OSGi. Alertas obtiene una referencia dinámica al contrato, consulta el catálogo y escribe en los registros una alerta por cada producto que cumple el umbral.
+Inventario publica sus contratos solo después de conectarse a PostgreSQL e inicializar el esquema. El repositorio ejecuta las consultas y transacciones; Alertas obtiene una referencia dinámica a `InventarioService`, consulta el catálogo y registra una alerta por cada transición que cumple el umbral.
 
 ### Bundle de Inventario
 
 | Elemento | Responsabilidad |
 |---|---|
 | `Producto` | Registro de Java (`record`) con código, nombre y cantidad disponible. |
-| `InventarioService` | API pública para listar productos y actualizar existencias. |
-| `InventarioServiceImpl` | Inicializa el catálogo, consulta y actualiza productos; publica el servicio mediante DS. |
+| `InventarioService` | API pública existente para listar productos y actualizar existencias. |
+| `InventarioMovimientosService` | API pública complementaria para registrar entradas y salidas. |
+| `InventarioServiceImpl` | Valida la configuración, inicializa el catálogo sin sobrescribir datos y publica los servicios mediante DS. |
+| `JdbcInventarioRepository` | Implementación interna JDBC con operaciones transaccionales y bloqueo de fila al cambiar existencias. |
 
-La implementación mantiene los productos en memoria con un `ConcurrentHashMap`. Al activarse el componente, carga el catálogo de demostración. `listarProductos()` devuelve una lista ordenada por código. `actualizarExistencias()` actualiza la cantidad de un producto existente y conserva su código y nombre; las cantidades negativas se rechazan con `IllegalArgumentException` y un código desconocido devuelve `false`.
+Los productos se guardan en PostgreSQL. Al activarse, el componente crea las tablas si no existen e inserta los 15 productos con `ON CONFLICT DO NOTHING`: reiniciar Karaf no duplica el catálogo ni repone cantidades que ya se cambiaron. `listarProductos()` devuelve la lista ordenada por código. `actualizarExistencias()` conserva el código y nombre y registra un movimiento `AJUSTE` cuando cambia la cantidad; una cantidad negativa se rechaza y un código desconocido devuelve `false`. Las operaciones de entrada y salida registran sus movimientos dentro de la misma transacción que actualiza el producto.
 
-El POM de Inventario exporta `com.stockguard.inventario.api` como paquete público. `com.stockguard.inventario.internal` es implementación privada y no forma parte del contrato que consumen otros bundles.
+El POM de Inventario exporta `com.stockguard.inventario.api` como paquete público. `com.stockguard.inventario.internal` es implementación privada y no forma parte del contrato que consumen otros bundles. La interfaz `InventarioService` y el record `Producto` conservan su contrato; las operaciones de movimientos se exponen en la interfaz complementaria.
 
 ### Bundle de Alertas
 
@@ -109,6 +117,67 @@ Del catálogo, once productos comienzan con existencias normales (cinco o más).
 
 P-015 tiene exactamente cinco unidades y no genera una alerta. El umbral se aplica con la condición estricta `cantidadDisponible < 5`.
 
+## Persistencia con PostgreSQL
+
+PostgreSQL mantiene el catálogo y el historial de cambios fuera del ciclo de vida de Karaf. La lógica de inventario depende de una interfaz interna de repositorio; su implementación JDBC usa `DataSource` obtenido del servicio OSGi estándar `DataSourceFactory`. Así, el controlador permanece como bundle de infraestructura independiente y el bundle de Inventario no empaqueta clases del driver. Se eligió PostgreSQL por su soporte de transacciones, restricciones relacionales y bloqueos de fila, necesarios para actualizar cantidades y registrar su movimiento como una sola operación.
+
+El esquema se crea al activar el componente y contiene:
+
+| Tabla | Campos y reglas |
+|---|---|
+| `productos` | `codigo` como clave primaria; `nombre`; `cantidad_disponible` entera y no negativa; `fecha_creacion` y `fecha_actualizacion` con zona horaria. Código y nombre no pueden estar vacíos. |
+| `movimientos_inventario` | Identificador `BIGINT` autogenerado; `codigo_producto` como clave foránea; tipo restringido a `ENTRADA`, `SALIDA` o `AJUSTE`; cantidad positiva, existencias anterior y posterior no negativas, fecha y observación opcional. Una restricción valida que el movimiento corresponda a las cantidades registradas. |
+
+Las consultas de actualización usan una transacción y `SELECT ... FOR UPDATE`. Un cambio de existencias y su fila de movimiento se confirman juntos o se revierten juntos. Las entradas y salidas exigen una cantidad positiva; una salida mayor al stock actual se rechaza. La API existente conserva su comportamiento: cantidades negativas generan `IllegalArgumentException`, los códigos inexistentes devuelven `false` y un código nulo genera `NullPointerException`. Un error de conexión o SQL se reporta como fallo de persistencia y nunca se convierte en una lista vacía ni en un guardado simulado.
+
+### Levantar PostgreSQL localmente
+
+El archivo `docker-compose.yml` crea únicamente los recursos `stockguard-postgres`, `stockguard-postgres-data` y `stockguard-network`. Publica PostgreSQL en `127.0.0.1:5437` y usa el puerto interno `5432`. El puerto 5437 se comprobó disponible al preparar esta configuración. No se reutilizan ni se alteran otros contenedores, bases, volúmenes o redes.
+
+En PowerShell, desde la raíz del repositorio:
+
+```powershell
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+notepad .env
+docker compose up -d postgres
+docker compose ps
+Test-NetConnection -ComputerName localhost -Port 5437
+```
+
+Antes de iniciar, reemplaza `REEMPLAZAR_POR_UN_SECRETO_LOCAL` por una contraseña local segura en `.env`; ese archivo está excluido de Git. Karaf, ejecutado directamente en Windows, se conecta a `jdbc:postgresql://localhost:5437/stockguard_db`. Un componente que se ejecute dentro de la misma red Compose usa el nombre DNS `postgres` y el puerto interno 5432.
+
+Para detener exclusivamente este servicio sin borrar su volumen:
+
+```powershell
+docker compose stop postgres
+```
+
+Para reanudarlo, ejecuta `docker compose start postgres`. No uses `docker compose down -v`: `-v` eliminaría los datos persistentes.
+
+### Configurar el bundle en Karaf
+
+El ejemplo externo está en `docs/configuracion/stockguard-inventario.cfg.example`. Con Karaf detenido o antes de iniciar una instalación de desarrollo, copia la configuración a su directorio `etc`:
+
+```powershell
+Copy-Item .\docs\configuracion\stockguard-inventario.cfg.example `
+  "$env:KARAF_HOME\etc\com.stockguard.inventario.internal.InventarioServiceImpl.cfg"
+notepad "$env:KARAF_HOME\etc\com.stockguard.inventario.internal.InventarioServiceImpl.cfg"
+```
+
+El ejemplo configura URL y usuario. Proporciona la contraseña mediante la variable de entorno `STOCKGUARD_DB_PASSWORD` antes de iniciar Karaf, o agrega `jdbc.password` al archivo local de Config Admin fuera del repositorio. No guardes contraseñas reales en el código ni en Git. Si la conexión no está disponible, DS deja el componente sin activar y los servicios de Inventario no se publican.
+
+Karaf debe ofrecer la especificación JDBC OSGi y el servicio de fábrica del driver. En su consola, instala la feature de JDBC de Karaf y el bundle PgJDBC:
+
+```text
+karaf@root()> feature:install jdbc
+karaf@root()> bundle:install -s mvn:org.postgresql/postgresql/42.7.14
+karaf@root()> service:list org.osgi.service.jdbc.DataSourceFactory
+```
+
+La primera orden instala infraestructura de Karaf; la segunda instala el driver PostgreSQL como bundle externo de terceros, no como un módulo de aplicación StockGuard. Verifica que `DataSourceFactory` aparezca antes de iniciar Inventario. Estas instrucciones no se han ejecutado contra la instalación Karaf del usuario durante esta fase.
+
+La conexión sobrevive a reinicios de Karaf porque reside en el volumen Docker. Al reactivar el componente, las sentencias `CREATE TABLE IF NOT EXISTS` y `INSERT ... ON CONFLICT DO NOTHING` crean lo que falte, conservan las cantidades modificadas y evitan duplicados.
+
 ## Estructura del proyecto
 
 ```text
@@ -116,15 +185,27 @@ StockGuard/
 ├── README.md
 ├── pom.xml                              # Agregador Maven; packaging=pom
 ├── .gitignore
+├── .env.example
+├── docker-compose.yml
+├── docs/
+│   ├── configuracion/
+│   │   └── stockguard-inventario.cfg.example
+│   └── capturas/
 ├── stockguard-inventario/
 │   ├── pom.xml
 │   └── src/
-│       ├── main/java/com/stockguard/inventario/
-│       │   ├── api/
-│       │   │   ├── InventarioService.java
-│       │   │   └── Producto.java
-│       │   └── internal/
-│       │       └── InventarioServiceImpl.java
+│       ├── main/
+│       │   ├── java/com/stockguard/inventario/
+│       │   │   ├── api/
+│       │   │   │   ├── InventarioService.java
+│       │   │   │   ├── InventarioMovimientosService.java
+│       │   │   │   └── Producto.java
+│       │   │   └── internal/
+│       │   │       ├── InventarioRepository.java
+│       │   │       ├── InventarioPersistenceException.java
+│       │   │       ├── JdbcInventarioRepository.java
+│       │   │       └── InventarioServiceImpl.java
+│       │   └── resources/db/schema.sql
 │       └── test/java/com/stockguard/inventario/internal/
 │           └── InventarioServiceImplTest.java
 └── stockguard-alertas/
@@ -143,6 +224,8 @@ Los paquetes `api` de Inventario forman la API pública. Los paquetes `internal`
 - JDK 17.
 - Maven 3.10.0 o una versión compatible con el POM.
 - Apache Karaf 4.4.x para ejecutar los bundles.
+- Docker Desktop con Docker Compose para PostgreSQL local y las pruebas de integración.
+- PostgreSQL 16 en contenedor; no hace falta instalar el servidor directamente en Windows.
 - Git.
 - Como herramientas de desarrollo, un IDE Java como IntelliJ IDEA, Eclipse o VS Code con soporte Java.
 
@@ -153,9 +236,12 @@ Versiones y alcances declarados en los POM:
 | Apache Felix Maven Bundle Plugin | 5.1.9 | Empaquetado OSGi de ambos módulos. |
 | Maven Compiler Plugin | 3.13.0 | Compilación con `--release 17`. |
 | Anotaciones OSGi Declarative Services | 1.5.1 | `provided`. |
+| API JDBC de OSGi | 1.1.0 | `provided` en Inventario; Karaf la ofrece mediante la feature `jdbc`. |
 | JUnit Jupiter | 5.14.4 | `test`. |
+| PostgreSQL JDBC | 42.7.14 | `test` para pruebas; se instala como bundle externo en Karaf. |
+| Testcontainers | 2.0.5 | `test`, módulos PostgreSQL y JUnit Jupiter. |
 | Mockito Core | 5.24.0 | `test`, en Alertas. |
-| SLF4J API | 1.7.36 | `provided`, en Alertas. |
+| SLF4J API | 1.7.36 | `provided`, en ambos bundles. |
 | Logback Classic | 1.2.13 | `test`, en Alertas. |
 | Maven Surefire Plugin | 3.6.1 | Ejecución de pruebas. |
 
@@ -175,7 +261,7 @@ karaf@root()> version
 
 ## Compilación y pruebas
 
-Desde el directorio raíz del repositorio, ejecuta:
+Desde el directorio raíz del repositorio y con Docker Desktop disponible, ejecuta:
 
 ```powershell
 mvn clean verify
@@ -183,9 +269,9 @@ mvn clean verify
 
 Maven ejecuta el reactor en el orden definido por las dependencias: primero procesa el agregador, construye Inventario y después Alertas. `clean` elimina resultados anteriores; `verify` ejecuta las fases previas, las pruebas configuradas por Surefire y las verificaciones del ciclo Maven. El resultado `BUILD SUCCESS` indica que el reactor terminó sin errores.
 
-JUnit Jupiter 5 ejecuta las pruebas unitarias de ambos módulos. Mockito se usa en las pruebas de Alertas para simular el contrato de Inventario cuando se necesita controlar su comportamiento. Las dependencias de pruebas tienen alcance `test` y no se empaquetan como clases de producción en los bundles.
+JUnit Jupiter 5 ejecuta las pruebas de ambos módulos. Inventario usa PostgreSQL real en un contenedor Testcontainers; Alertas usa Mockito para controlar el contrato de Inventario en pruebas deterministas. El contenedor de pruebas es temporal y usa un puerto asignado por Testcontainers, independiente del servicio local en 5437. Las dependencias de pruebas tienen alcance `test` y no se empaquetan en los bundles de producción.
 
-Una validación anterior ejecutó 18 pruebas: 9 de Inventario y 9 de Alertas. La Fase 5.1 amplía la suite de Alertas; tras su validación, el proyecto cuenta con 25 pruebas (9 de Inventario y 16 de Alertas), todas ejecutadas por `mvn clean verify`. La evidencia visual de fases anteriores conserva la salida correspondiente a sus ejecuciones, no a esta suite ampliada.
+La ejecución `mvn clean verify` de esta fase pasó 34 pruebas: 18 en Inventario contra PostgreSQL real y 16 en Alertas, sin fallos, errores ni pruebas omitidas. Las evidencias visuales anteriores corresponden a ejecuciones previas y no acreditan esta integración.
 
 Los bundles generados están en:
 
@@ -198,26 +284,64 @@ Los informes XML y de texto de Surefire quedan bajo `target/surefire-reports/` e
 
 ## Ejecución en Apache Karaf
 
-Las instrucciones separan los comandos de PowerShell de los comandos que se escriben en la consola interactiva de Karaf. Si Karaf ya está ejecutándose, usa su consola existente.
+Las instrucciones separan PowerShell de la consola interactiva de Karaf. PostgreSQL, el controlador OSGi y la configuración del componente deben estar listos antes de iniciar Inventario. Si ya existe una instancia Karaf en uso, no la detengas ni la actualices hasta elegir explícitamente un entorno de desarrollo.
 
-### 1. Iniciar Karaf
+### 1. Iniciar PostgreSQL y configurar el componente
 
-En PowerShell, cambia al directorio donde descomprimiste Karaf y ejecuta:
+En PowerShell, desde la raíz del repositorio, crea un archivo local de variables y levanta solo el servicio de StockGuard:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+docker compose up -d postgres
+docker compose ps
+Test-NetConnection -ComputerName localhost -Port 5437
+```
+
+Edita `.env` para cambiar el valor de ejemplo de `STOCKGUARD_DB_PASSWORD`. Si cambias el usuario o nombre de base de datos, actualiza también `jdbc.user` o `jdbc.url` en la configuración de Karaf. Copia la configuración de Inventario solo si todavía no existe, para conservar los ajustes locales; si no usarás la variable de entorno, agrega `jdbc.password` al archivo local de Config Admin:
+
+```powershell
+$configInventario = Join-Path $env:KARAF_HOME `
+  "etc\com.stockguard.inventario.internal.InventarioServiceImpl.cfg"
+if (-not (Test-Path $configInventario)) {
+  Copy-Item .\docs\configuracion\stockguard-inventario.cfg.example $configInventario
+}
+notepad "$env:KARAF_HOME\etc\com.stockguard.inventario.internal.InventarioServiceImpl.cfg"
+```
+
+La contraseña guardada en Config Admin queda en la instalación de Karaf, fuera del repositorio. Como alternativa, define `STOCKGUARD_DB_PASSWORD` en el entorno del proceso antes de iniciar Karaf.
+
+### 2. Iniciar Karaf y habilitar JDBC y DS
+
+En PowerShell, cambia al directorio de tu instalación y ejecuta:
 
 ```powershell
 Set-Location $env:KARAF_HOME
 .\bin\karaf.bat
 ```
 
-Si no definiste `KARAF_HOME`, sustituye esa línea por la ruta de tu propia instalación. Verifica que el contenedor sea Karaf 4.4.x con `version`.
-
-### 2. Habilitar Declarative Services
-
-En la consola de Karaf, instala SCR si aún no está disponible:
+En la consola de Karaf:
 
 ```text
+karaf@root()> version
 karaf@root()> feature:install scr
+karaf@root()> feature:install jdbc
+karaf@root()> bundle:list
 ```
+
+Busca `org.postgresql.jdbc` en la lista. Solo si el controlador aún no está instalado, ejecuta:
+
+```text
+karaf@root()> bundle:install -s mvn:org.postgresql/postgresql/42.7.14
+```
+
+Después, confirma que el servicio JDBC esté disponible:
+
+```text
+karaf@root()> service:list org.osgi.service.jdbc.DataSourceFactory
+```
+
+Verifica Karaf 4.4.x y que el controlador haya registrado `DataSourceFactory` para `org.postgresql.Driver`.
 
 ### 3. Compilar y preparar las ubicaciones locales
 
@@ -237,25 +361,25 @@ $alertasUrl
 
 Copia las URL `file:///...` impresas para usarlas en la consola de Karaf. Esto evita fijar la ubicación local del repositorio en las instrucciones.
 
-### 4. Instalar los bundles sin duplicarlos
+### 4. Instalar o actualizar los bundles sin duplicarlos
 
-Primero, en Karaf, ejecuta `bundle:list` y busca los nombres simbólicos `com.stockguard.inventario` y `com.stockguard.alertas`. Los ID numéricos asignados por Karaf dependen de cada contenedor.
+En Karaf, ejecuta `bundle:list` y busca los nombres simbólicos `com.stockguard.inventario` y `com.stockguard.alertas`. Los ID numéricos dependen de cada contenedor.
 
-Si un bundle todavía no aparece, instala su JAR local una sola vez. Sustituye cada URL por la que preparaste en PowerShell:
+Si un bundle aún no está instalado, instala su JAR local una sola vez:
 
 ```text
 karaf@root()> bundle:install -s 'file:///ruta/local/stockguard-inventario/target/stockguard-inventario-1.0.0-SNAPSHOT.jar'
 karaf@root()> bundle:install -s 'file:///ruta/local/stockguard-alertas/target/stockguard-alertas-1.0.0-SNAPSHOT.jar'
 ```
 
-Instala Inventario antes que Alertas. Si los bundles ya están instalados, no ejecutes `bundle:install` de nuevo: localiza sus ID con `bundle:list` y actualiza las instalaciones existentes con las URL locales:
+Instala Inventario después de configurar la base de datos y el controlador, antes de Alertas. Si ya están instalados, no uses `bundle:install` de nuevo: descubre los ID vigentes y actualiza las instalaciones existentes con las URL locales:
 
 ```text
 karaf@root()> bundle:update <ID_INVENTARIO> 'file:///ruta/local/stockguard-inventario/target/stockguard-inventario-1.0.0-SNAPSHOT.jar'
 karaf@root()> bundle:update <ID_ALERTAS> 'file:///ruta/local/stockguard-alertas/target/stockguard-alertas-1.0.0-SNAPSHOT.jar'
 ```
 
-Después de actualizar, comprueba sus estados con `bundle:list`; si alguno no está `Active`, inícialo con `bundle:start <ID>`. Vuelve a ejecutar `bundle:list` para descubrir los ID actuales en lugar de asumir que conservan valores de otra ejecución.
+Después de actualizar, revisa `bundle:list`; si alguno no está `Active`, usa `bundle:start <ID>`. Un error de base de datos, configuración o `DataSourceFactory` dejará Inventario sin activar; revisa los logs antes de continuar.
 
 ### 5. Comprobar servicios y registros
 
@@ -264,10 +388,29 @@ En Karaf:
 ```text
 karaf@root()> bundle:list
 karaf@root()> service:list com.stockguard.inventario.api.InventarioService
+karaf@root()> service:list com.stockguard.inventario.api.InventarioMovimientosService
 karaf@root()> log:display
 ```
 
-Se espera que los dos bundles estén `Active`, que el servicio `com.stockguard.inventario.api.InventarioService` aparezca registrado y que los registros de Alertas incluyan las alertas de los cuatro productos bajo el umbral. El monitor ejecuta una primera revisión al activarse y repite cada 10 segundos.
+Se espera que ambos bundles de aplicación estén `Active` y que Inventario publique ambos servicios. Los registros de Inventario indican que PostgreSQL se inicializó; Alertas registra las transiciones de los cuatro productos bajo el umbral. El monitor ejecuta una primera revisión al activarse y repite cada 10 segundos.
+
+### Comprobar que las existencias sobreviven a una reactivación
+
+En un entorno de desarrollo, consulta la cantidad almacenada desde PowerShell:
+
+```powershell
+docker exec stockguard-postgres psql -U stockguard -d stockguard_db `
+  -c "SELECT codigo, nombre, cantidad_disponible FROM productos WHERE codigo = 'P-001';"
+```
+
+Para preparar la demostración, puedes cambiar `P-001` directamente en la base de datos (si cambiaste usuario o base, sustituye los valores del comando):
+
+```powershell
+docker exec stockguard-postgres psql -U stockguard -d stockguard_db `
+  -c "UPDATE productos SET cantidad_disponible = 8 WHERE codigo = 'P-001';"
+```
+
+Este ajuste SQL es solo un dato de prueba y no crea una fila de movimiento. En Karaf, descubre el ID actual por el nombre `com.stockguard.inventario`, detén y vuelve a iniciar Inventario, y ejecuta de nuevo el `SELECT`; la cantidad debe permanecer en 8 porque el catálogo inicial inserta códigos faltantes sin sobrescribir filas existentes. También puedes reiniciar Karaf en un entorno de desarrollo y repetir la consulta. No detengas una instancia compartida para esta demostración.
 
 ## Demostración de desconexión y recuperación
 
@@ -301,16 +444,16 @@ Estos son los resultados esperados según el diseño del componente. La verifica
 
 ## Pruebas automatizadas
 
-El proyecto incluye dos clases de pruebas unitarias:
+El proyecto incluye dos clases principales de pruebas automatizadas:
 
 | Clase | Cobertura principal |
 |---|---|
-| `InventarioServiceImplTest` | Catálogo inicial de 15 productos, orden y códigos, umbral, actualizaciones, cantidades inválidas, consistencia y acceso concurrente. |
+| `InventarioServiceImplTest` | Integración contra PostgreSQL real con Testcontainers: conexión, catálogo idempotente, consultas, ajustes, entradas/salidas, movimientos, validaciones, rollback, persistencia tras recrear el componente y concurrencia. |
 | `MonitorAlertasTest` | Umbral, deduplicación, recuperación en cinco unidades y por encima, nuevo ciclo tras una caída, independencia entre productos, desconexión/reconexión, fallos de consulta, concurrencia y cierre del programador. |
 
-JUnit 5 proporciona las aserciones y el ciclo de ejecución de las pruebas. Mockito permite controlar el servicio de Inventario en los escenarios de Alertas sin iniciar Karaf. La prueba del monitor usa un programador controlado para verificar las tareas sin esperar diez segundos de reloj por cada ciclo.
+JUnit 5 proporciona las aserciones y el ciclo de ejecución. Testcontainers inicia una instancia efímera de PostgreSQL para verificar el SQL, las restricciones y las transacciones contra el motor real; Docker debe estar activo al ejecutar esas pruebas. Mockito permite controlar el servicio de Inventario en las pruebas de Alertas sin iniciar Karaf. El monitor usa un programador controlado, por lo que sus pruebas no esperan diez segundos de reloj por ciclo.
 
-Estas pruebas son unitarias: ejercitan componentes Java y sus contratos. La instalación de bundles, la publicación efectiva del servicio en el registro y el comportamiento del contenedor son verificaciones de integración que se realizan en Karaf. Los resultados manuales previos descritos arriba no deben confundirse con la ejecución de Surefire.
+Las pruebas de Inventario son de integración con PostgreSQL, mientras que las de Alertas son pruebas automatizadas de componentes con colaboradores controlados. Ninguna inicia Karaf. La instalación de bundles, el registro efectivo de servicios y la activación con Config Admin son verificaciones de runtime independientes que deben ejecutarse en Karaf; los resultados manuales anteriores no acreditan esta integración nueva.
 
 ## Evidencias de ejecución
 
@@ -372,14 +515,14 @@ Se conservan los extractos de texto de ejecuciones anteriores en `docs/capturas/
 
 ## Limitaciones actuales
 
-- El inventario se almacena en memoria y no usa una base de datos.
-- La activación del componente vuelve a registrar los datos iniciales de demostración; los cambios realizados durante la ejecución no son persistentes.
+- El servicio PostgreSQL debe estar disponible y configurado antes de activar Inventario; no existe un modo degradado en memoria.
+- El catálogo inicial solo agrega códigos inexistentes. Los cambios de existencias persisten, pero editar nombres o retirar productos requiere una operación administrativa que aún no está expuesta.
 - El proyecto todavía no incluye interfaz gráfica ni API REST.
 - Los estados activos de alerta se mantienen solo en memoria y no se persisten entre reinicios de la JVM. Al iniciar un proceso nuevo, el primer ciclo vuelve a notificar los productos que sigan bajo el umbral.
-- Las existencias no se gestionan mediante una interfaz de usuario. La API del servicio permite actualizarlas desde otro componente OSGi.
+- Las existencias se gestionan mediante servicios OSGi, no mediante una interfaz de usuario.
 
 Estas limitaciones delimitan el alcance actual del ejemplo y no implican funciones ya implementadas.
 
 ## Posibles mejoras futuras
 
-Como extensiones independientes se podrían explorar una interfaz web, una API REST, almacenamiento persistente del inventario y del historial de alertas, un umbral configurable y operaciones adicionales de inventario. Ninguna de estas posibilidades forma parte de la implementación actual.
+Como extensiones independientes se podrían explorar una interfaz web, una API REST, almacenamiento persistente del historial de alertas, un umbral configurable, consultas del historial de movimientos y operaciones adicionales de administración de productos. Ninguna de estas posibilidades forma parte de la implementación actual.

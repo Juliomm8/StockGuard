@@ -1,0 +1,5 @@
+# Copiar a etc/com.stockguard.inventario.internal.InventarioServiceImpl.cfg
+jdbc.url=jdbc:postgresql://localhost:5437/stockguard_db
+jdbc.user=stockguard
+# La contraseña se lee desde STOCKGUARD_DB_PASSWORD en el entorno de Karaf.
+# También puede definirse como jdbc.password en Config Admin fuera del repositorio.
