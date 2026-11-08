@@ -1,6 +1,9 @@
 package com.stockguard.inventario.internal;
 
+import com.stockguard.inventario.api.InventarioNoDisponibleException;
+import com.stockguard.inventario.api.MovimientoInventario;
 import com.stockguard.inventario.api.Producto;
+import com.stockguard.inventario.api.TipoMovimiento;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -118,6 +121,16 @@ class InventarioServiceImplTest {
     }
 
     @Test
+    @DisplayName("Busca productos por código sin convertir ausencias en errores")
+    void buscaProductoExistenteYDesconocido() {
+        assertEquals(
+                new Producto("P-001", "Teclado mecánico Logitech", 12),
+                inventario.buscarProducto("P-001").orElseThrow()
+        );
+        assertTrue(inventario.buscarProducto("P-999").isEmpty());
+    }
+
+    @Test
     @DisplayName("Clasifica correctamente las existencias iniciales")
     void clasificaStockNormalYBajo() {
         List<Producto> productos = inventario.listarProductos();
@@ -186,6 +199,22 @@ class InventarioServiceImplTest {
         );
 
         assertEquals("El código es obligatorio", error.getMessage());
+    }
+
+    @Test
+    @DisplayName("Comunica una indisponibilidad si el componente ya fue detenido")
+    void informaServicioNoDisponibleTrasDesactivacion() {
+        inventario.desactivar();
+
+        InventarioNoDisponibleException error = assertThrows(
+                InventarioNoDisponibleException.class,
+                () -> inventario.listarProductos()
+        );
+
+        assertEquals(
+                "El servicio de Inventario no está disponible.",
+                error.getMessage()
+        );
     }
 
     @Test
@@ -321,6 +350,28 @@ class InventarioServiceImplTest {
     }
 
     @Test
+    @DisplayName("Consulta movimientos y diferencia productos sin historial")
+    void consultaHistorialDeMovimientos() {
+        assertEquals(List.of(), inventario.buscarMovimientos("P-001").orElseThrow());
+        assertTrue(inventario.buscarMovimientos("P-999").isEmpty());
+
+        assertTrue(inventario.registrarEntrada("P-001", 2));
+        assertTrue(inventario.registrarSalida("P-001", 1));
+
+        List<MovimientoInventario> historial = inventario
+                .buscarMovimientos("P-001")
+                .orElseThrow();
+        assertEquals(2, historial.size());
+        var movimientoReciente = inventario.buscarMovimientos("P-001")
+                .orElseThrow()
+                .get(0);
+        assertEquals(TipoMovimiento.SALIDA, movimientoReciente.tipo());
+        assertEquals(1, movimientoReciente.cantidadModificada());
+        assertEquals(14, movimientoReciente.existenciaAnterior());
+        assertEquals(13, movimientoReciente.existenciaPosterior());
+    }
+
+    @Test
     @DisplayName("Rechaza movimientos inválidos y evita existencias negativas")
     void rechazaMovimientosInvalidos() {
         assertThrows(
@@ -368,7 +419,7 @@ class InventarioServiceImplTest {
         }
 
         assertThrows(
-                InventarioPersistenceException.class,
+                InventarioNoDisponibleException.class,
                 () -> inventario.registrarEntrada("P-001", 2)
         );
 

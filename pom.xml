@@ -16,6 +16,7 @@
     <modules>
         <module>stockguard-inventario</module>
         <module>stockguard-alertas</module>
+        <module>stockguard-api-rest</module>
     </modules>
 
     <properties>

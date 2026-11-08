@@ -1,6 +1,8 @@
 package com.stockguard.inventario.internal;
 
+import com.stockguard.inventario.api.MovimientoInventario;
 import com.stockguard.inventario.api.Producto;
+import com.stockguard.inventario.api.TipoMovimiento;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -13,6 +15,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import javax.sql.DataSource;
 
 /** Implementación JDBC transaccional del repositorio de inventario. */
@@ -28,6 +31,26 @@ final class JdbcInventarioRepository implements InventarioRepository {
             SELECT codigo, nombre, cantidad_disponible
             FROM productos
             ORDER BY codigo
+            """;
+    private static final String SQL_BUSCAR_PRODUCTO = """
+            SELECT codigo, nombre, cantidad_disponible
+            FROM productos
+            WHERE codigo = ?
+            """;
+    private static final String SQL_BUSCAR_MOVIMIENTOS = """
+            SELECT p.codigo AS codigo_producto,
+                   m.id AS id_movimiento,
+                   m.tipo_movimiento,
+                   m.cantidad_modificada,
+                   m.existencia_anterior,
+                   m.existencia_posterior,
+                   m.fecha_movimiento,
+                   m.observacion
+            FROM productos p
+            LEFT JOIN movimientos_inventario m
+                ON m.codigo_producto = p.codigo
+            WHERE p.codigo = ?
+            ORDER BY m.fecha_movimiento DESC NULLS LAST, m.id DESC
             """;
     private static final String SQL_BUSCAR_PRODUCTO_PARA_ACTUALIZAR = """
             SELECT nombre, cantidad_disponible
@@ -86,6 +109,74 @@ final class JdbcInventarioRepository implements InventarioRepository {
         } catch (SQLException error) {
             throw new InventarioPersistenceException(
                     "No fue posible consultar los productos en PostgreSQL.",
+                    error
+            );
+        }
+    }
+
+    @Override
+    public Optional<Producto> buscarProducto(String codigo) {
+        Objects.requireNonNull(codigo, "El código es obligatorio");
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement consulta = connection.prepareStatement(
+                     SQL_BUSCAR_PRODUCTO
+             )) {
+            consulta.setString(1, codigo);
+            try (ResultSet resultado = consulta.executeQuery()) {
+                if (!resultado.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new Producto(
+                        resultado.getString("codigo"),
+                        resultado.getString("nombre"),
+                        resultado.getInt("cantidad_disponible")
+                ));
+            }
+        } catch (SQLException error) {
+            throw new InventarioPersistenceException(
+                    "No fue posible buscar el producto en PostgreSQL.",
+                    error
+            );
+        }
+    }
+
+    @Override
+    public Optional<List<MovimientoInventario>> buscarMovimientos(String codigo) {
+        Objects.requireNonNull(codigo, "El código es obligatorio");
+        try (Connection connection = dataSource.getConnection();
+             PreparedStatement consulta = connection.prepareStatement(
+                     SQL_BUSCAR_MOVIMIENTOS
+             )) {
+            consulta.setString(1, codigo);
+            try (ResultSet resultados = consulta.executeQuery()) {
+                if (!resultados.next()) {
+                    return Optional.empty();
+                }
+
+                List<MovimientoInventario> movimientos = new ArrayList<>();
+                do {
+                    long id = resultados.getLong("id_movimiento");
+                    if (!resultados.wasNull()) {
+                        movimientos.add(new MovimientoInventario(
+                                id,
+                                resultados.getString("codigo_producto"),
+                                TipoMovimiento.valueOf(
+                                        resultados.getString("tipo_movimiento")
+                                ),
+                                resultados.getInt("cantidad_modificada"),
+                                resultados.getInt("existencia_anterior"),
+                                resultados.getInt("existencia_posterior"),
+                                resultados.getTimestamp("fecha_movimiento")
+                                        .toInstant(),
+                                resultados.getString("observacion")
+                        ));
+                    }
+                } while (resultados.next());
+                return Optional.of(List.copyOf(movimientos));
+            }
+        } catch (SQLException error) {
+            throw new InventarioPersistenceException(
+                    "No fue posible consultar los movimientos en PostgreSQL.",
                     error
             );
         }

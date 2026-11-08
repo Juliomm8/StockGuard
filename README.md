@@ -2,25 +2,28 @@
 
 StockGuard es una aplicación de servidor de demostración para controlar el inventario de una pequeña tienda de tecnología y accesorios de computación. Persiste productos y movimientos en PostgreSQL, y registra alertas en los logs cuando la disponibilidad cae por debajo de cinco unidades.
 
-El proyecto sirve como ejemplo de una aplicación Java modular ejecutada en Apache Karaf. Sus dos bundles OSGi pueden gestionar su ciclo de vida por separado, mientras que el bundle de alertas descubre el servicio de inventario mediante el registro de servicios de OSGi.
+El proyecto sirve como ejemplo de una aplicación Java modular ejecutada en Apache Karaf. Inventario y Alertas conservan sus bundles actuales; un tercer bundle REST agrega una capa de transporte independiente que consume los servicios de Inventario mediante el registro OSGi.
 
 ## Funcionalidad
 
 - Inicializar 15 productos de demostración en PostgreSQL sin duplicarlos ni sobrescribir existencias existentes.
 - Consultar productos ordenados por código, ajustar existencias y registrar entradas y salidas.
+- Exponer consultas y operaciones de existencias mediante una API REST JSON.
 - Revisar las existencias cada 10 segundos.
 - Registrar una alerta cuando un producto tiene menos de cinco unidades.
 - Mantener el monitor activo si Inventario deja de estar disponible y reconectarlo cuando el servicio vuelve.
 
 ## Arquitectura
 
-StockGuard está dividido en dos bundles de aplicación: `stockguard-inventario` contiene el contrato y la implementación del inventario; `stockguard-alertas` contiene el monitor que consulta ese contrato. El proyecto Maven de la raíz solo coordina la compilación de ambos módulos (`packaging=pom`), por lo que no genera un tercer bundle de aplicación.
+StockGuard separa la lógica de negocio, el monitoreo y el transporte HTTP en tres bundles de aplicación: `stockguard-inventario`, `stockguard-alertas` y `stockguard-api-rest`. El proyecto Maven de la raíz solo coordina estos módulos (`packaging=pom`) y no genera un bundle.
 
-OSGi permite instalar, resolver, iniciar, detener y actualizar módulos dentro de un mismo entorno de ejecución. Para este ejemplo, la separación hace visible el ciclo de vida independiente entre quien ofrece los datos y quien los supervisa. PostgreSQL se integra mediante JDBC estándar de OSGi y un controlador PostgreSQL instalado como bundle de infraestructura de terceros; no se agrega un tercer bundle de aplicación. No se trata de una arquitectura de microservicios distribuidos: los bundles se ejecutan en el mismo contenedor Karaf y la comunicación entre ellos ocurre mediante servicios OSGi.
+OSGi permite instalar, resolver, iniciar, detener y actualizar módulos dentro de un mismo entorno de ejecución. El bundle REST actúa como adaptador HTTP: transforma solicitudes JSON en llamadas a los contratos públicos de Inventario, sin acceder a PostgreSQL ni replicar sus reglas de negocio. No se trata de una arquitectura de microservicios distribuidos: los bundles se ejecutan en el mismo contenedor Karaf y la comunicación interna ocurre mediante servicios OSGi.
 
 ### Registro de servicios y Declarative Services
 
-El bundle de Inventario implementa `InventarioService` y `InventarioMovimientosService`; Declarative Services (DS) publica ambos contratos en el registro OSGi. El registro asocia los servicios con sus interfaces públicas; otros componentes pueden solicitar una referencia sin depender de la clase concreta. Para acceder a PostgreSQL, Inventario consume `org.osgi.service.jdbc.DataSourceFactory`, que proporciona el bundle OSGi del controlador.
+El bundle de Inventario implementa y publica `InventarioService`, `InventarioMovimientosService` e `InventarioConsultaService`; Declarative Services (DS) registra los tres contratos públicos. Alertas y REST los consumen mediante referencias opcionales y dinámicas, por lo que ambos componentes pueden activarse aunque Inventario no esté disponible y recuperan la referencia cuando vuelve.
+
+`stockguard-api-rest` publica una instancia `javax.ws.rs.core.Application` con base `/api` y un recurso JAX-RS. El JAX-RS Whiteboard de Apache Aries descubre esos servicios OSGi y los conecta con Apache CXF y el servidor HTTP de Karaf. La aplicación usa la línea JAX-RS 2.1 (`javax.ws.rs`), compatible con CXF 3.6.12 de Karaf 4.4.12; no utiliza Spring Boot ni un servidor independiente. El proveedor Jackson de la feature Whiteboard convierte los DTO a JSON.
 
 `MonitorAlertas` declara con anotaciones DS una referencia de cardinalidad `OPTIONAL` y política `DYNAMIC`. `OPTIONAL` permite que Alertas se active aunque Inventario no esté disponible. `DYNAMIC` permite que DS notifique la llegada o retirada del servicio durante la vida del componente, sin exigir que Alertas se detenga y vuelva a iniciar. El monitor consulta el servicio cuando tiene una referencia y espera la reconexión cuando no la tiene.
 
@@ -28,7 +31,7 @@ DS procesa las anotaciones de componentes y referencias durante la construcción
 
 ### Metadatos OSGi generados
 
-El manifiesto de Inventario identifica el bundle como `com.stockguard.inventario`, exporta `com.stockguard.inventario.api` con versión `1.1.0` y declara ambos servicios de inventario. Importa la API JDBC OSGi en alcance `provided`; el controlador no se incrusta en el JAR. Alertas importa la API de Inventario dentro del rango `[1.0,2)`. Los descriptores DS se empaquetan bajo `OSGI-INF/`: Alertas conserva su referencia `0..1` y `dynamic`, mientras que Inventario declara el requisito de `DataSourceFactory` y la configuración obligatoria.
+El manifiesto de Inventario exporta `com.stockguard.inventario.api` en versión `1.2.0` y declara los tres servicios de Inventario. Importa la API JDBC OSGi; el controlador no se incrusta en el JAR. Alertas importa la API dentro del rango `[1.0,2)`. REST importa el mismo paquete público dentro de `[1.0,2)` y no incluye clases de Inventario. Sus descriptores DS registran la aplicación, el recurso y el proveedor de errores; las tres referencias a Inventario son `0..1` y `dynamic`. Los descriptores se empaquetan bajo `OSGI-INF/`.
 
 ### Diagrama de componentes
 
@@ -36,7 +39,7 @@ El manifiesto de Inventario identifica el bundle como `com.stockguard.inventario
 flowchart LR
     subgraph INV[Bundle stockguard-inventario]
         IMPL[InventarioServiceImpl]
-        API[Contrato público InventarioService]
+        API[Contratos públicos de Inventario]
         IMPL -->|implementa| API
         REPO[JdbcInventarioRepository]
         IMPL --> REPO
@@ -48,17 +51,29 @@ flowchart LR
     subgraph ALT[Bundle stockguard-alertas]
         MON[MonitorAlertas]
     end
+    subgraph REST[Bundle stockguard-api-rest]
+        APP[Aplicación JAX-RS /api]
+        RESOURCE[ProductosResource y DTO]
+        APP --> RESOURCE
+    end
+    HTTP[OSGi JAX-RS Whiteboard / Apache CXF]
+    CLIENTE[Cliente HTTP]
     ALERTA[Alertas de existencias bajas en registros]
 
-    IMPL -->|registra el servicio bajo el contrato| REG
+    IMPL -->|registra contratos| REG
     REG -->|referencia OPTIONAL y DYNAMIC| MON
-    MON -->|consulta cada 10 segundos mediante| API
+    REG -->|referencias OPTIONAL y DYNAMIC| RESOURCE
+    RESOURCE -->|consulta y ejecuta operaciones vía| API
+    APP -->|registra Application JAX-RS| REG
+    RESOURCE -->|registra el recurso JAX-RS| REG
+    REG -->|Whiteboard publica el endpoint| HTTP
+    CLIENTE -->|HTTP JSON /api| HTTP
     MON -->|registra productos con stock menor que 5| ALERTA
     JDBC -->|conexión JDBC| REPO
     REPO -->|transacciones y consultas| DB
 ```
 
-Inventario publica sus contratos solo después de conectarse a PostgreSQL e inicializar el esquema. El repositorio ejecuta las consultas y transacciones; Alertas obtiene una referencia dinámica a `InventarioService`, consulta el catálogo y registra una alerta por cada transición que cumple el umbral.
+Inventario publica sus contratos solo después de conectarse a PostgreSQL e inicializar el esquema. Alertas y el recurso REST encuentran los contratos a través del registro. El Whiteboard publica el endpoint HTTP en el servidor de Karaf; la capa REST no conoce el repositorio ni la conexión JDBC.
 
 ### Bundle de Inventario
 
@@ -67,12 +82,43 @@ Inventario publica sus contratos solo después de conectarse a PostgreSQL e inic
 | `Producto` | Registro de Java (`record`) con código, nombre y cantidad disponible. |
 | `InventarioService` | API pública existente para listar productos y actualizar existencias. |
 | `InventarioMovimientosService` | API pública complementaria para registrar entradas y salidas. |
+| `InventarioConsultaService` | API pública para buscar un producto y consultar su historial de movimientos. |
+| `MovimientoInventario` / `TipoMovimiento` | Tipos públicos inmutables para representar movimientos consultados. |
+| `InventarioNoDisponibleException` | Comunica un fallo de persistencia sin exponer detalles SQL en la capa REST. |
 | `InventarioServiceImpl` | Valida la configuración, inicializa el catálogo sin sobrescribir datos y publica los servicios mediante DS. |
 | `JdbcInventarioRepository` | Implementación interna JDBC con operaciones transaccionales y bloqueo de fila al cambiar existencias. |
 
 Los productos se guardan en PostgreSQL. Al activarse, el componente crea las tablas si no existen e inserta los 15 productos con `ON CONFLICT DO NOTHING`: reiniciar Karaf no duplica el catálogo ni repone cantidades que ya se cambiaron. `listarProductos()` devuelve la lista ordenada por código. `actualizarExistencias()` conserva el código y nombre y registra un movimiento `AJUSTE` cuando cambia la cantidad; una cantidad negativa se rechaza y un código desconocido devuelve `false`. Las operaciones de entrada y salida registran sus movimientos dentro de la misma transacción que actualiza el producto.
 
 El POM de Inventario exporta `com.stockguard.inventario.api` como paquete público. `com.stockguard.inventario.internal` es implementación privada y no forma parte del contrato que consumen otros bundles. La interfaz `InventarioService` y el record `Producto` conservan su contrato; las operaciones de movimientos se exponen en la interfaz complementaria.
+
+### Bundle de API REST
+
+Este bundle separa el protocolo HTTP de la lógica de negocio y de la persistencia:
+
+| Componente | Responsabilidad |
+|---|---|
+| `StockGuardApplication` | Registra la aplicación JAX-RS con base `/api` en el Whiteboard OSGi. |
+| `ProductosResource` | Expone las rutas de productos y operaciones; consume los tres servicios públicos de Inventario con referencias `OPTIONAL` y `DYNAMIC`. |
+| DTO (`ProductoDto`, `MovimientoDto`, `CantidadRequest`, `ErrorDto`) | Define la representación JSON de entrada y salida sin serializar directamente contratos internos. |
+| `RestExceptionMapper` | Convierte errores HTTP o excepciones inesperadas en respuestas seguras. |
+
+El bundle usa Apache Aries JAX-RS Whiteboard y Apache CXF, disponibles como features de Karaf; Jackson proporciona JSON. En producción, CXF, Jackson y las APIs OSGi/JAX-RS son servicios/bundles del contenedor, no bibliotecas empaquetadas dentro del bundle REST. En el POM, las dependencias del servidor HTTP y del proveedor Jackson solo se usan en pruebas. Si Inventario no está disponible, los recursos responden `503 Service Unavailable`; cuando reaparecen los servicios, DS vuelve a enlazarlos. REST no crea conexiones JDBC ni ejecuta SQL.
+
+#### Endpoints
+
+La base de la API es `http://localhost:8181/api` en la configuración HTTP predeterminada de Karaf. Todas las respuestas de recursos usan JSON; las operaciones POST reciben `{ "cantidad": n }`.
+
+| Método | Ruta | Comportamiento | Respuesta satisfactoria |
+|---|---|---|---|
+| `GET` | `/api/productos` | Lista el catálogo ordenado por código. | `200` y lista de productos. |
+| `GET` | `/api/productos/{codigo}` | Busca un producto. | `200` y producto; `404` si no existe. |
+| `POST` | `/api/productos/{codigo}/entradas` | Registra entrada; `cantidad` debe ser positiva. | `204`; `404` si no existe. |
+| `POST` | `/api/productos/{codigo}/salidas` | Registra salida; `cantidad` debe ser positiva y no exceder stock. | `204`; `404` si no existe; `409` si el movimiento no es posible. |
+| `POST` | `/api/productos/{codigo}/ajustes` | Fija las existencias en la cantidad solicitada, incluido cero. | `204`; `404` si no existe. |
+| `GET` | `/api/productos/{codigo}/movimientos` | Lista movimientos del más reciente al más antiguo. | `200` y lista, incluso vacía si el producto existe; `404` si no existe. |
+
+Los códigos no válidos y las cantidades incorrectas responden `400`. Si el servicio de Inventario o su almacenamiento no están disponibles, la API responde `503`; los fallos no previstos usan `500` y un mensaje genérico. Los detalles técnicos se registran en Karaf, no se devuelven al cliente. La API no incluye autenticación ni CORS configurado.
 
 ### Bundle de Alertas
 
@@ -199,7 +245,11 @@ StockGuard/
 │       │   │   ├── api/
 │       │   │   │   ├── InventarioService.java
 │       │   │   │   ├── InventarioMovimientosService.java
-│       │   │   │   └── Producto.java
+│       │   │   │   ├── InventarioConsultaService.java
+│       │   │   │   ├── InventarioNoDisponibleException.java
+│       │   │   │   ├── MovimientoInventario.java
+│       │   │   │   ├── Producto.java
+│       │   │   │   └── TipoMovimiento.java
 │       │   │   └── internal/
 │       │   │       ├── InventarioRepository.java
 │       │   │       ├── InventarioPersistenceException.java
@@ -208,16 +258,32 @@ StockGuard/
 │       │   └── resources/db/schema.sql
 │       └── test/java/com/stockguard/inventario/internal/
 │           └── InventarioServiceImplTest.java
-└── stockguard-alertas/
+├── stockguard-alertas/
+│   ├── pom.xml
+│   └── src/
+│       ├── main/java/com/stockguard/alertas/internal/
+│       │   └── MonitorAlertas.java
+│       └── test/java/com/stockguard/alertas/internal/
+│           └── MonitorAlertasTest.java
+└── stockguard-api-rest/
     ├── pom.xml
     └── src/
-        ├── main/java/com/stockguard/alertas/internal/
-        │   └── MonitorAlertas.java
-        └── test/java/com/stockguard/alertas/internal/
-            └── MonitorAlertasTest.java
+        ├── main/java/com/stockguard/api/rest/internal/
+        │   ├── StockGuardApplication.java
+        │   ├── ProductosResource.java
+        │   ├── RestExceptionMapper.java
+        │   └── dto/
+        │       ├── CantidadRequest.java
+        │       ├── ErrorDto.java
+        │       ├── MovimientoDto.java
+        │       └── ProductoDto.java
+        └── test/java/com/stockguard/api/rest/internal/
+            ├── ProductosResourceTest.java
+            ├── RestExceptionMapperTest.java
+            └── ProductosResourceIntegrationTest.java
 ```
 
-Los paquetes `api` de Inventario forman la API pública. Los paquetes `internal` contienen implementaciones y son privados para cada bundle. Los directorios `target/` se generan durante la compilación y no son parte del código fuente.
+El paquete `com.stockguard.inventario.api` forma el contrato público entre bundles. Los paquetes `internal` de Inventario, Alertas y REST son privados. Los DTO REST son representaciones HTTP y no forman parte del API OSGi de Inventario. Los directorios `target/` se generan durante la compilación y no son parte del código fuente.
 
 ## Requisitos previos
 
@@ -233,15 +299,20 @@ Versiones y alcances declarados en los POM:
 
 | Componente | Versión | Alcance |
 |---|---:|---|
-| Apache Felix Maven Bundle Plugin | 5.1.9 | Empaquetado OSGi de ambos módulos. |
+| Apache Felix Maven Bundle Plugin | 5.1.9 | Empaquetado OSGi de los tres bundles de aplicación. |
 | Maven Compiler Plugin | 3.13.0 | Compilación con `--release 17`. |
 | Anotaciones OSGi Declarative Services | 1.5.1 | `provided`. |
 | API JDBC de OSGi | 1.1.0 | `provided` en Inventario; Karaf la ofrece mediante la feature `jdbc`. |
+| API de servicios JAX-RS de OSGi | 1.0.0 | `provided` en REST. |
+| API JAX-RS `javax` de Aries | 1.0.1 | `provided` en REST; declara el contrato JAX-RS 2.1. |
 | JUnit Jupiter | 5.14.4 | `test`. |
 | PostgreSQL JDBC | 42.7.14 | `test` para pruebas; se instala como bundle externo en Karaf. |
 | Testcontainers | 2.0.5 | `test`, módulos PostgreSQL y JUnit Jupiter. |
-| Mockito Core | 5.24.0 | `test`, en Alertas. |
-| SLF4J API | 1.7.36 | `provided`, en ambos bundles. |
+| Mockito Core | 5.24.0 | `test`, en Alertas y REST. |
+| Apache CXF JAX-RS | 3.6.12 | `test` en REST; Karaf aporta el runtime CXF compatible. |
+| Aries JAX-RS Whiteboard | 2.0.2 | Feature OSGi que publica recursos JAX-RS en Karaf. |
+| Jackson JAX-RS Provider | 2.14.1 | Feature Karaf para JSON y proveedor usado por pruebas REST. |
+| SLF4J API | 1.7.36 | `provided` en los tres bundles. |
 | Logback Classic | 1.2.13 | `test`, en Alertas. |
 | Maven Surefire Plugin | 3.6.1 | Ejecución de pruebas. |
 
@@ -267,17 +338,18 @@ Desde el directorio raíz del repositorio y con Docker Desktop disponible, ejecu
 mvn clean verify
 ```
 
-Maven ejecuta el reactor en el orden definido por las dependencias: primero procesa el agregador, construye Inventario y después Alertas. `clean` elimina resultados anteriores; `verify` ejecuta las fases previas, las pruebas configuradas por Surefire y las verificaciones del ciclo Maven. El resultado `BUILD SUCCESS` indica que el reactor terminó sin errores.
+Maven ejecuta el reactor en el orden definido por las dependencias: primero procesa el agregador, construye Inventario, Alertas y REST. `clean` elimina resultados anteriores; `verify` ejecuta las fases previas, las pruebas configuradas por Surefire y las verificaciones del ciclo Maven. El resultado `BUILD SUCCESS` indica que los cuatro proyectos del reactor terminaron sin errores.
 
-JUnit Jupiter 5 ejecuta las pruebas de ambos módulos. Inventario usa PostgreSQL real en un contenedor Testcontainers; Alertas usa Mockito para controlar el contrato de Inventario en pruebas deterministas. El contenedor de pruebas es temporal y usa un puerto asignado por Testcontainers, independiente del servicio local en 5437. Las dependencias de pruebas tienen alcance `test` y no se empaquetan en los bundles de producción.
+JUnit Jupiter 5 ejecuta las pruebas de los módulos. Inventario usa PostgreSQL real en un contenedor Testcontainers; Alertas y REST usan Mockito para controlar los contratos de Inventario. REST incluye pruebas unitarias directas y pruebas HTTP con un servidor CXF embebido y un puerto loopback efímero. Ese servidor no es Karaf ni PostgreSQL. Las dependencias de pruebas tienen alcance `test` y no se empaquetan en los bundles.
 
-La ejecución `mvn clean verify` de esta fase pasó 34 pruebas: 18 en Inventario contra PostgreSQL real y 16 en Alertas, sin fallos, errores ni pruebas omitidas. Las evidencias visuales anteriores corresponden a ejecuciones previas y no acreditan esta integración.
+La ejecución de `mvn clean verify` realizada para esta API pasó 49 pruebas: 21 en Inventario contra PostgreSQL real, 16 en Alertas y 12 en REST (9 unitarias y 3 HTTP), sin fallos, errores ni pruebas omitidas. Las capturas existentes documentan ejecuciones anteriores y no acreditan el despliegue de la capa REST.
 
 Los bundles generados están en:
 
 ```text
 stockguard-inventario/target/stockguard-inventario-1.0.0-SNAPSHOT.jar
 stockguard-alertas/target/stockguard-alertas-1.0.0-SNAPSHOT.jar
+stockguard-api-rest/target/stockguard-api-rest-1.0.0-SNAPSHOT.jar
 ```
 
 Los informes XML y de texto de Surefire quedan bajo `target/surefire-reports/` en cada módulo.
@@ -326,8 +398,27 @@ En la consola de Karaf:
 karaf@root()> version
 karaf@root()> feature:install scr
 karaf@root()> feature:install jdbc
+karaf@root()> feature:repo-list
+karaf@root()> feature:list -i
 karaf@root()> bundle:list
 ```
+
+Si faltan los repositorios, agrégalos una vez con versiones alineadas con Karaf 4.4.12 y comprueba luego `feature:repo-list`:
+
+```text
+karaf@root()> feature:repo-add mvn:org.ops4j.pax.web/pax-web-features/8.0.35/xml/features
+karaf@root()> feature:repo-add mvn:org.apache.cxf.karaf/apache-cxf/3.6.12/xml/features
+karaf@root()> feature:repo-add mvn:org.apache.aries.jax.rs/org.apache.aries.jax.rs.features/2.0.2/xml
+```
+
+Instala solo las features que no aparecen como instaladas en `feature:list -i`:
+
+```text
+karaf@root()> feature:install http-whiteboard/8.0.35
+karaf@root()> feature:install aries-jax-rs-whiteboard/2.0.2 aries-jax-rs-whiteboard-jackson/2.0.2
+```
+
+Aries Whiteboard conecta los servicios JAX-RS con el runtime HTTP y CXF de Karaf; la feature Jackson agrega el proveedor JSON. No instales CXF ni Jackson como dependencias adicionales dentro del JAR de StockGuard.
 
 Busca `org.postgresql.jdbc` en la lista. Solo si el controlador aún no está instalado, ejecuta:
 
@@ -352,34 +443,41 @@ mvn clean verify
 
 $inventarioJar = (Resolve-Path ".\stockguard-inventario\target\stockguard-inventario-1.0.0-SNAPSHOT.jar").Path
 $alertasJar = (Resolve-Path ".\stockguard-alertas\target\stockguard-alertas-1.0.0-SNAPSHOT.jar").Path
+$apiRestJar = (Resolve-Path ".\stockguard-api-rest\target\stockguard-api-rest-1.0.0-SNAPSHOT.jar").Path
 $inventarioUrl = ([System.Uri]::new($inventarioJar)).AbsoluteUri
 $alertasUrl = ([System.Uri]::new($alertasJar)).AbsoluteUri
+$apiRestUrl = ([System.Uri]::new($apiRestJar)).AbsoluteUri
 
 $inventarioUrl
 $alertasUrl
+$apiRestUrl
 ```
 
 Copia las URL `file:///...` impresas para usarlas en la consola de Karaf. Esto evita fijar la ubicación local del repositorio en las instrucciones.
 
 ### 4. Instalar o actualizar los bundles sin duplicarlos
 
-En Karaf, ejecuta `bundle:list` y busca los nombres simbólicos `com.stockguard.inventario` y `com.stockguard.alertas`. Los ID numéricos dependen de cada contenedor.
+En Karaf, ejecuta `bundle:list` y busca los nombres simbólicos `com.stockguard.inventario`, `com.stockguard.alertas` y `com.stockguard.api.rest`. Los ID numéricos dependen de cada contenedor. Como el contrato de Inventario añadió consultas públicas, actualiza el bundle ya instalado en vez de instalar otra copia. Alertas mantiene compatibilidad con el rango de API `[1.0,2)`.
 
-Si un bundle aún no está instalado, instala su JAR local una sola vez:
-
-```text
-karaf@root()> bundle:install -s 'file:///ruta/local/stockguard-inventario/target/stockguard-inventario-1.0.0-SNAPSHOT.jar'
-karaf@root()> bundle:install -s 'file:///ruta/local/stockguard-alertas/target/stockguard-alertas-1.0.0-SNAPSHOT.jar'
-```
-
-Instala Inventario después de configurar la base de datos y el controlador, antes de Alertas. Si ya están instalados, no uses `bundle:install` de nuevo: descubre los ID vigentes y actualiza las instalaciones existentes con las URL locales:
+Actualiza la instalación existente de Inventario con el JAR compilado:
 
 ```text
 karaf@root()> bundle:update <ID_INVENTARIO> 'file:///ruta/local/stockguard-inventario/target/stockguard-inventario-1.0.0-SNAPSHOT.jar'
-karaf@root()> bundle:update <ID_ALERTAS> 'file:///ruta/local/stockguard-alertas/target/stockguard-alertas-1.0.0-SNAPSHOT.jar'
 ```
 
-Después de actualizar, revisa `bundle:list`; si alguno no está `Active`, usa `bundle:start <ID>`. Un error de base de datos, configuración o `DataSourceFactory` dejará Inventario sin activar; revisa los logs antes de continuar.
+Si `com.stockguard.api.rest` todavía no aparece en `bundle:list`, instala el bundle REST nuevo una sola vez:
+
+```text
+karaf@root()> bundle:install -s 'file:///ruta/local/stockguard-api-rest/target/stockguard-api-rest-1.0.0-SNAPSHOT.jar'
+```
+
+Si ya aparece instalado, actualiza ese mismo ID en vez de instalar otra copia:
+
+```text
+karaf@root()> bundle:update <ID_API_REST> 'file:///ruta/local/stockguard-api-rest/target/stockguard-api-rest-1.0.0-SNAPSHOT.jar'
+```
+
+No reinstales ni actualices Alertas si no cambió su código. Revisa `bundle:list`; si hace falta, inicia el bundle con `bundle:start <ID>`. Un error de base de datos, configuración o `DataSourceFactory` dejará Inventario sin activar; en ese caso, REST permanecerá activo pero responderá `503`.
 
 ### 5. Comprobar servicios y registros
 
@@ -389,10 +487,25 @@ En Karaf:
 karaf@root()> bundle:list
 karaf@root()> service:list com.stockguard.inventario.api.InventarioService
 karaf@root()> service:list com.stockguard.inventario.api.InventarioMovimientosService
+karaf@root()> service:list com.stockguard.inventario.api.InventarioConsultaService
 karaf@root()> log:display
 ```
 
-Se espera que ambos bundles de aplicación estén `Active` y que Inventario publique ambos servicios. Los registros de Inventario indican que PostgreSQL se inicializó; Alertas registra las transiciones de los cuatro productos bajo el umbral. El monitor ejecuta una primera revisión al activarse y repite cada 10 segundos.
+Se espera que los tres bundles de aplicación estén `Active` y que el registro muestre los servicios de Inventario. Con HTTP Whiteboard activo, prueba el endpoint desde PowerShell:
+
+```powershell
+Invoke-RestMethod -Uri "http://localhost:8181/api/productos" -Method Get
+Invoke-RestMethod -Uri "http://localhost:8181/api/productos/P-001" -Method Get
+Invoke-RestMethod -Uri "http://localhost:8181/api/productos/P-001/movimientos" -Method Get
+Invoke-RestMethod -Uri "http://localhost:8181/api/productos/P-001/entradas" `
+  -Method Post -ContentType "application/json" -Body '{"cantidad":2}'
+Invoke-RestMethod -Uri "http://localhost:8181/api/productos/P-001/salidas" `
+  -Method Post -ContentType "application/json" -Body '{"cantidad":1}'
+Invoke-RestMethod -Uri "http://localhost:8181/api/productos/P-001/ajustes" `
+  -Method Post -ContentType "application/json" -Body '{"cantidad":8}'
+```
+
+El puerto HTTP predeterminado de Karaf es `8181`; si la instalación usa otra configuración, sustituye el puerto. Los registros de Inventario indican que PostgreSQL se inicializó; Alertas registra las transiciones de los cuatro productos bajo el umbral. El monitor ejecuta una primera revisión al activarse y repite cada 10 segundos.
 
 ### Comprobar que las existencias sobreviven a una reactivación
 
@@ -416,14 +529,14 @@ Este ajuste SQL es solo un dato de prueba y no crea una fila de movimiento. En K
 
 Esta demostración cambia el estado de bundles en un contenedor Karaf. Debe realizarse en un entorno de desarrollo; no es una prueba automatizada de unidad.
 
-1. En Karaf, ejecuta `bundle:list` y anota el ID actual de Inventario y de Alertas por sus nombres simbólicos.
+1. En Karaf, ejecuta `bundle:list` y anota los ID actuales de Inventario, Alertas y API REST por sus nombres simbólicos.
 2. Detén Inventario:
 
    ```text
    karaf@root()> bundle:stop <ID_INVENTARIO>
    ```
 
-3. Ejecuta `bundle:list`. Inventario debe aparecer como `Resolved`; Alertas debe seguir `Active`.
+3. Ejecuta `bundle:list`. Inventario debe aparecer como `Resolved`; Alertas y API REST deben seguir `Active`. Mientras Inventario esté ausente, una consulta HTTP responde `503 Service Unavailable`.
 4. Revisa la desconexión en los registros:
 
    ```text
@@ -437,41 +550,44 @@ Esta demostración cambia el estado de bundles en un contenedor Karaf. Debe real
    karaf@root()> bundle:start <ID_INVENTARIO>
    ```
 
-6. Confirma que ambos bundles estén `Active` y que `service:list com.stockguard.inventario.api.InventarioService` muestre el servicio.
-7. Revisa los registros para el mensaje de conexión y las alertas de existencias bajas. La siguiente consulta programada debe ocurrir dentro del intervalo de 10 segundos sin reiniciar Alertas.
+6. Confirma que los tres bundles estén `Active` y que `service:list com.stockguard.inventario.api.InventarioService` muestre el servicio.
+7. Repite `Invoke-RestMethod -Uri "http://localhost:8181/api/productos" -Method Get`; la API debe responder de nuevo. Revisa los registros para la reconexión y las alertas de existencias bajas. La siguiente consulta de Alertas debe ocurrir dentro del intervalo de 10 segundos sin reiniciar ese bundle.
 
 Estos son los resultados esperados según el diseño del componente. La verificación manual de desconexión y reconexión se reportó en una ejecución anterior de Karaf; no se ha repetido como parte de esta fase documental.
 
 ## Pruebas automatizadas
 
-El proyecto incluye dos clases principales de pruebas automatizadas:
+Las pruebas automatizadas cubren los tres bundles:
 
 | Clase | Cobertura principal |
 |---|---|
 | `InventarioServiceImplTest` | Integración contra PostgreSQL real con Testcontainers: conexión, catálogo idempotente, consultas, ajustes, entradas/salidas, movimientos, validaciones, rollback, persistencia tras recrear el componente y concurrencia. |
 | `MonitorAlertasTest` | Umbral, deduplicación, recuperación en cinco unidades y por encima, nuevo ciclo tras una caída, independencia entre productos, desconexión/reconexión, fallos de consulta, concurrencia y cierre del programador. |
+| `ProductosResourceTest` | Validación de códigos y cantidades, conversión a DTO, estados HTTP, ausencia de servicios y manejo de errores. |
+| `RestExceptionMapperTest` | Conservación de estados HTTP y ocultamiento de detalles internos en errores. |
+| `ProductosResourceIntegrationTest` | Solicitudes HTTP a CXF embebido para JSON, operaciones POST y errores de validación. |
 
-JUnit 5 proporciona las aserciones y el ciclo de ejecución. Testcontainers inicia una instancia efímera de PostgreSQL para verificar el SQL, las restricciones y las transacciones contra el motor real; Docker debe estar activo al ejecutar esas pruebas. Mockito permite controlar el servicio de Inventario en las pruebas de Alertas sin iniciar Karaf. El monitor usa un programador controlado, por lo que sus pruebas no esperan diez segundos de reloj por ciclo.
+JUnit Jupiter proporciona las aserciones y el ciclo de ejecución. Testcontainers inicia una instancia efímera de PostgreSQL para verificar el SQL, las restricciones y las transacciones contra el motor real; Docker debe estar activo al ejecutar esas pruebas. Mockito controla los servicios OSGi de Inventario en Alertas y REST sin iniciar Karaf. El monitor usa un programador controlado, por lo que sus pruebas no esperan diez segundos de reloj por ciclo.
 
-Las pruebas de Inventario son de integración con PostgreSQL, mientras que las de Alertas son pruebas automatizadas de componentes con colaboradores controlados. Ninguna inicia Karaf. La instalación de bundles, el registro efectivo de servicios y la activación con Config Admin son verificaciones de runtime independientes que deben ejecutarse en Karaf; los resultados manuales anteriores no acreditan esta integración nueva.
+Las pruebas de Inventario son de integración con PostgreSQL. Las de REST ejercitan HTTP sobre CXF local y servicios simulados; no comprueban el descubrimiento del Whiteboard ni la conexión entre bundles dentro de Karaf. Esa validación de runtime se debe realizar con los pasos anteriores; la evidencia manual existente corresponde a la arquitectura anterior a REST.
 
 ## Evidencias de ejecución
 
-Las imágenes siguientes son capturas PNG de la pantalla real de VS Code y su terminal integrado. Las ejecuciones de Maven se realizaron en PowerShell; las consultas de bundles, servicios y registros se realizaron en la consola local de Apache Karaf 4.4.12. Cada imagen conserva la salida visible de su ejecución. Las capturas corresponden a la fase anterior a la Fase 5.1; por eso, sus registros repetidos documentan el comportamiento previo y no son evidencia de la nueva deduplicación.
+Las imágenes siguientes son capturas PNG de la pantalla real de VS Code y su terminal integrado. Las ejecuciones de Maven se realizaron en PowerShell; las consultas de bundles, servicios y registros se realizaron en la consola local de Apache Karaf 4.4.12. Estas capturas son evidencia histórica de la arquitectura con Inventario y Alertas: no muestran el bundle REST ni el endpoint HTTP y no sustituyen una verificación runtime de esta fase.
 
 ### Compilación y pruebas
 
-La primera captura muestra los informes Surefire de Inventario y Alertas: 9 pruebas en cada módulo, sin fallos, errores ni omisiones.
+La captura histórica muestra los informes Surefire de Inventario y Alertas de una ejecución anterior: 9 pruebas en cada módulo. La verificación más reciente de tres módulos y 49 pruebas se informa en la sección de compilación, no en esta imagen.
 
 ![Informes de pruebas de Inventario y Alertas con 9 pruebas aprobadas en cada módulo](docs/capturas/01-pruebas-automatizadas.png)
 
-La segunda captura muestra la salida de `mvn clean verify`, el resumen satisfactorio de los tres proyectos del reactor y `BUILD SUCCESS`.
+La segunda captura muestra una salida histórica de `mvn clean verify` con el reactor de tres proyectos y `BUILD SUCCESS`; no incluye el nuevo bundle REST.
 
 ![Resumen de Maven con Inventario, Alertas y el agregador en SUCCESS](docs/capturas/02-build-success.png)
 
 ### Bundles y servicio OSGi
 
-Después de la demostración de ciclo de vida, se confirmó que Inventario y Alertas quedaron activos. En esta ejecución Karaf asignó los ID 57 y 58, respectivamente; los identificadores pueden variar entre instalaciones.
+Después de la demostración de ciclo de vida, se confirmó que Inventario y Alertas quedaron activos. En esta ejecución Karaf asignó los ID 57 y 58, respectivamente; los identificadores pueden variar entre instalaciones. Es evidencia anterior a la instalación de `stockguard-api-rest`.
 
 ![Bundles StockGuard de Inventario y Alertas en estado Active](docs/capturas/03-bundles-activos.png)
 
@@ -517,7 +633,7 @@ Se conservan los extractos de texto de ejecuciones anteriores en `docs/capturas/
 
 - El servicio PostgreSQL debe estar disponible y configurado antes de activar Inventario; no existe un modo degradado en memoria.
 - El catálogo inicial solo agrega códigos inexistentes. Los cambios de existencias persisten, pero editar nombres o retirar productos requiere una operación administrativa que aún no está expuesta.
-- El proyecto todavía no incluye interfaz gráfica ni API REST.
+- El proyecto aún no incluye interfaz gráfica. La API REST no incorpora autenticación ni configuración CORS y requiere las features correspondientes en Karaf.
 - Los estados activos de alerta se mantienen solo en memoria y no se persisten entre reinicios de la JVM. Al iniciar un proceso nuevo, el primer ciclo vuelve a notificar los productos que sigan bajo el umbral.
 - Las existencias se gestionan mediante servicios OSGi, no mediante una interfaz de usuario.
 
@@ -525,4 +641,4 @@ Estas limitaciones delimitan el alcance actual del ejemplo y no implican funcion
 
 ## Posibles mejoras futuras
 
-Como extensiones independientes se podrían explorar una interfaz web, una API REST, almacenamiento persistente del historial de alertas, un umbral configurable, consultas del historial de movimientos y operaciones adicionales de administración de productos. Ninguna de estas posibilidades forma parte de la implementación actual.
+Como extensiones independientes se podrían explorar una interfaz web, autenticación y autorización para la API, configuración CORS, almacenamiento persistente del historial de alertas, un umbral configurable y operaciones adicionales de administración de productos. Estas posibilidades no forman parte de la implementación actual.

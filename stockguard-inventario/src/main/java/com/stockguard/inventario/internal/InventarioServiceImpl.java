@@ -1,7 +1,10 @@
 package com.stockguard.inventario.internal;
 
+import com.stockguard.inventario.api.InventarioConsultaService;
 import com.stockguard.inventario.api.InventarioMovimientosService;
+import com.stockguard.inventario.api.InventarioNoDisponibleException;
 import com.stockguard.inventario.api.InventarioService;
+import com.stockguard.inventario.api.MovimientoInventario;
 import com.stockguard.inventario.api.Producto;
 
 import org.osgi.service.component.annotations.Activate;
@@ -17,7 +20,9 @@ import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
+import java.util.function.Supplier;
 
 /** Implementación interna y persistente del servicio de inventario. */
 @Component(
@@ -25,14 +30,16 @@ import java.util.Properties;
         configurationPid = "com.stockguard.inventario.internal.InventarioServiceImpl",
         service = {
                 InventarioService.class,
-                InventarioMovimientosService.class
+                InventarioMovimientosService.class,
+                InventarioConsultaService.class
         },
         configurationPolicy = ConfigurationPolicy.REQUIRE,
         immediate = true
 )
 public class InventarioServiceImpl implements
         InventarioService,
-        InventarioMovimientosService {
+        InventarioMovimientosService,
+        InventarioConsultaService {
 
     private static final Logger LOGGER =
             LoggerFactory.getLogger(InventarioServiceImpl.class);
@@ -125,7 +132,27 @@ public class InventarioServiceImpl implements
 
     @Override
     public List<Producto> listarProductos() {
-        return repositorioActivo().listarProductos();
+        return ejecutarOperacion(
+                () -> repositorioActivo().listarProductos()
+        );
+    }
+
+    @Override
+    public Optional<Producto> buscarProducto(String codigo) {
+        Objects.requireNonNull(codigo, "El código es obligatorio");
+        return ejecutarOperacion(
+                () -> repositorioActivo().buscarProducto(codigo)
+        );
+    }
+
+    @Override
+    public Optional<List<MovimientoInventario>> buscarMovimientos(
+            String codigo
+    ) {
+        Objects.requireNonNull(codigo, "El código es obligatorio");
+        return ejecutarOperacion(
+                () -> repositorioActivo().buscarMovimientos(codigo)
+        );
     }
 
     @Override
@@ -136,24 +163,47 @@ public class InventarioServiceImpl implements
                     "La cantidad no puede ser negativa"
             );
         }
-        return repositorioActivo().actualizarExistencias(codigo, nuevaCantidad);
+        return ejecutarOperacion(
+                () -> repositorioActivo().actualizarExistencias(
+                        codigo,
+                        nuevaCantidad
+                )
+        );
     }
 
     @Override
     public boolean registrarEntrada(String codigo, int cantidad) {
-        return repositorioActivo().registrarEntrada(codigo, cantidad);
+        return ejecutarOperacion(
+                () -> repositorioActivo().registrarEntrada(codigo, cantidad)
+        );
     }
 
     @Override
     public boolean registrarSalida(String codigo, int cantidad) {
-        return repositorioActivo().registrarSalida(codigo, cantidad);
+        return ejecutarOperacion(
+                () -> repositorioActivo().registrarSalida(codigo, cantidad)
+        );
+    }
+
+    private <T> T ejecutarOperacion(Supplier<T> operacion) {
+        try {
+            return operacion.get();
+        } catch (InventarioPersistenceException error) {
+            LOGGER.error(
+                    "Falló una operación de Inventario sobre PostgreSQL.",
+                    error
+            );
+            throw new InventarioNoDisponibleException(error);
+        }
     }
 
     private InventarioRepository repositorioActivo() {
         InventarioRepository actual = repositorio;
         if (actual == null) {
-            throw new IllegalStateException(
-                    "El servicio de Inventario no está activo."
+            throw new InventarioNoDisponibleException(
+                    new IllegalStateException(
+                            "El servicio de Inventario no está activo."
+                    )
             );
         }
         return actual;
