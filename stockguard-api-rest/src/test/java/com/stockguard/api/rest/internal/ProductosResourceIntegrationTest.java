@@ -1,10 +1,11 @@
 package com.stockguard.api.rest.internal;
 
-import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import com.stockguard.inventario.api.InventarioConsultaService;
 import com.stockguard.inventario.api.InventarioMovimientosService;
 import com.stockguard.inventario.api.InventarioService;
+import com.stockguard.inventario.api.MovimientoInventario;
 import com.stockguard.inventario.api.Producto;
+import com.stockguard.inventario.api.TipoMovimiento;
 
 import java.io.IOException;
 import java.net.InetAddress;
@@ -13,7 +14,9 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.apache.cxf.jaxrs.JAXRSServerFactoryBean;
 import org.apache.cxf.endpoint.Server;
@@ -54,7 +57,7 @@ class ProductosResourceIntegrationTest {
         fabrica.setAddress("http://127.0.0.1:" + puerto + "/");
         fabrica.setServiceBeans(List.of(recurso));
         fabrica.setProviders(List.of(
-                new JacksonJaxbJsonProvider(),
+                new StockGuardJsonProvider(),
                 new RestExceptionMapper()
         ));
         servidor = fabrica.create();
@@ -92,6 +95,59 @@ class ProductosResourceIntegrationTest {
         assertTrue(respuesta.body().contains("P-001"));
         assertTrue(respuesta.body().contains("Teclado mecánico Logitech"));
         assertTrue(respuesta.body().contains("\"cantidadDisponible\":12"));
+    }
+
+    @Test
+    @DisplayName("Serializa un producto individual y sus movimientos como JSON")
+    void sirveProductoYMovimientosComoJson() throws Exception {
+        when(consultas.buscarProducto("P-001"))
+                .thenReturn(Optional.of(
+                        new Producto("P-001", "Teclado mecánico Logitech", 12)
+                ));
+        when(consultas.buscarMovimientos("P-001"))
+                .thenReturn(Optional.of(List.of(new MovimientoInventario(
+                        7L,
+                        "P-001",
+                        TipoMovimiento.ENTRADA,
+                        4,
+                        8,
+                        12,
+                        Instant.parse("2026-11-08T12:00:00Z"),
+                        "Reposición"
+                ))));
+
+        HttpResponse<String> producto = cliente.send(
+                HttpRequest.newBuilder(URI.create(baseUrl + "/P-001"))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString()
+        );
+        HttpResponse<String> movimientosProducto = cliente.send(
+                HttpRequest.newBuilder(URI.create(baseUrl + "/P-001/movimientos"))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString()
+        );
+
+        assertEquals(200, producto.statusCode());
+        assertTrue(producto.headers()
+                .firstValue("Content-Type")
+                .orElse("")
+                .contains("application/json"));
+        assertTrue(producto.body().contains("P-001"));
+        assertTrue(producto.body().contains("Teclado mecánico Logitech"));
+        assertTrue(producto.body().contains("cantidadDisponible"));
+        assertTrue(producto.body().contains("12"));
+
+        assertEquals(200, movimientosProducto.statusCode());
+        assertTrue(movimientosProducto.headers()
+                .firstValue("Content-Type")
+                .orElse("")
+                .contains("application/json"));
+        assertTrue(movimientosProducto.body().contains("ENTRADA"));
+        assertTrue(movimientosProducto.body().contains("existenciaPosterior"));
+        assertTrue(movimientosProducto.body().contains("12"));
+        assertTrue(movimientosProducto.body().contains("Reposición"));
     }
 
     @Test
