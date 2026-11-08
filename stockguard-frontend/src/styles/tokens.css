@@ -1,0 +1,64 @@
+:root {
+  /* Superficies */
+  --color-fondo: #f4f5f3;
+  --color-superficie: #ffffff;
+  --color-superficie-tenue: #f8f9fa;
+  --color-borde: #dce0e5;
+  --color-borde-suave: #e9ecef;
+
+  /* Navegación */
+  --color-lateral: #1e2a38;
+  --color-lateral-activo: #2b3a4d;
+  --color-lateral-texto: #c5cfdb;
+  --color-lateral-tenue: #8494a7;
+
+  /* Texto */
+  --color-texto: #18212e;
+  --color-texto-secundario: #556170;
+  --color-texto-tenue: #7a8594;
+
+  /* Acción */
+  --color-primario: #2456a4;
+  --color-primario-hover: #1d4887;
+  --color-primario-suave: #e8eff9;
+
+  /* Estados */
+  --color-exito: #1f7a4d;
+  --color-exito-suave: #e7f4ec;
+  --color-peligro: #b42318;
+  --color-peligro-suave: #fdecea;
+  --color-advertencia: #9a5207;
+  --color-advertencia-borde: #e9b46a;
+  --color-advertencia-suave: #fdf3e3;
+  --color-informacion-suave: #eef3f9;
+
+  /* Tipografía */
+  --fuente: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --texto-xs: 0.75rem;
+  --texto-sm: 0.8125rem;
+  --texto-base: 0.875rem;
+  --texto-md: 1rem;
+  --texto-lg: 1.25rem;
+  --texto-xl: 1.625rem;
+  --texto-2xl: 2rem;
+
+  /* Espaciado (base 4 px) */
+  --espacio-1: 0.25rem;
+  --espacio-2: 0.5rem;
+  --espacio-3: 0.75rem;
+  --espacio-4: 1rem;
+  --espacio-5: 1.25rem;
+  --espacio-6: 1.5rem;
+  --espacio-8: 2rem;
+
+  /* Forma */
+  --radio-sm: 3px;
+  --radio: 5px;
+  --radio-lg: 7px;
+  --sombra-modal: 0 12px 32px rgb(24 33 46 / 0.18);
+  --sombra-flotante: 0 4px 14px rgb(24 33 46 / 0.12);
+
+  --ancho-lateral: 236px;
+  --alto-superior: 56px;
+  --foco: 0 0 0 3px rgb(36 86 164 / 0.35);
+}
