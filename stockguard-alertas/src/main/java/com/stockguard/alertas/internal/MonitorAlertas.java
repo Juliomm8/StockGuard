@@ -12,8 +12,10 @@ import org.osgi.service.component.annotations.ReferencePolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -37,6 +39,7 @@ public class MonitorAlertas {
 
     private final AtomicReference<InventarioService> inventarioService =
             new AtomicReference<>();
+    private final Set<String> productosConAlertaActiva = new HashSet<>();
     private final Supplier<ScheduledExecutorService> programadorFactory;
 
     private volatile ScheduledExecutorService programador;
@@ -157,7 +160,7 @@ public class MonitorAlertas {
     /**
      * Detecta productos con existencias inferiores al umbral.
      */
-    private void revisarInventario() {
+    private synchronized void revisarInventario() {
         InventarioService servicio = inventarioService.get();
 
         if (servicio == null) {
@@ -169,24 +172,40 @@ public class MonitorAlertas {
         }
 
         try {
-            List<Producto> productos = servicio.listarProductos();
+            List<Producto> productos = List.copyOf(
+                    servicio.listarProductos()
+            );
 
             for (Producto producto : productos) {
-                if (producto.cantidadDisponible() < UMBRAL_STOCK) {
-                    LOGGER.warn(
-                            "ALERTA: {} ({}) tiene {} unidades disponibles; "
-                            + "el umbral es menor que {}.",
-                            producto.nombre(),
-                            producto.codigo(),
-                            producto.cantidadDisponible(),
-                            UMBRAL_STOCK
-                    );
-                }
+                actualizarEstadoAlerta(producto);
             }
         } catch (RuntimeException error) {
             LOGGER.warn(
                     "No se pudo consultar el servicio de Inventario.",
                     error
+            );
+        }
+    }
+
+    private void actualizarEstadoAlerta(Producto producto) {
+        if (producto.cantidadDisponible() < UMBRAL_STOCK) {
+            if (productosConAlertaActiva.add(producto.codigo())) {
+                LOGGER.warn(
+                        "ALERTA: {} ({}) tiene {} unidades disponibles; "
+                        + "el umbral es menor que {}.",
+                        producto.nombre(),
+                        producto.codigo(),
+                        producto.cantidadDisponible(),
+                        UMBRAL_STOCK
+                );
+            }
+        } else if (productosConAlertaActiva.remove(producto.codigo())) {
+            LOGGER.info(
+                    "RECUPERACIÓN: {} ({}) recuperó su stock normal con "
+                    + "{} unidades disponibles.",
+                    producto.nombre(),
+                    producto.codigo(),
+                    producto.cantidadDisponible()
             );
         }
     }

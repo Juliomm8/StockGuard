@@ -123,6 +123,153 @@ class MonitorAlertasTest {
     }
 
     @Test
+    @DisplayName("No repite una alerta mientras el producto siga bajo el umbral")
+    void evitaAlertasDuplicadasEnCiclosConsecutivos() {
+        InventarioService inventario = mock(InventarioService.class);
+        when(inventario.listarProductos()).thenReturn(List.of(
+                new Producto("P-002", "Mouse inalámbrico Logitech", 3)
+        ));
+
+        monitor.vincularInventario(inventario);
+        monitor.activar();
+        Runnable tarea = tareaProgramada(programador);
+
+        tarea.run();
+        tarea.run();
+        tarea.run();
+
+        assertEquals(1, mensajesDeAlerta().size());
+    }
+
+    @Test
+    @DisplayName("Notifica una sola recuperación al alcanzar exactamente cinco")
+    void notificaRecuperacionAlLlegarAExactamenteCinco() {
+        InventarioService inventario = mock(InventarioService.class);
+        when(inventario.listarProductos())
+                .thenReturn(List.of(new Producto(
+                        "P-002", "Mouse inalámbrico Logitech", 3
+                )))
+                .thenReturn(List.of(new Producto(
+                        "P-002", "Mouse inalámbrico Logitech", 5
+                )))
+                .thenReturn(List.of(new Producto(
+                        "P-002", "Mouse inalámbrico Logitech", 5
+                )));
+
+        monitor.vincularInventario(inventario);
+        monitor.activar();
+        Runnable tarea = tareaProgramada(programador);
+
+        tarea.run();
+        tarea.run();
+        tarea.run();
+
+        assertEquals(1, mensajesDeAlerta().size());
+        assertEquals(1, mensajesDeRecuperacion().size());
+        assertTrue(mensajesDeRecuperacion().get(0).contains(
+                "RECUPERACIÓN: Mouse inalámbrico Logitech (P-002) "
+                        + "recuperó su stock normal con 5 unidades disponibles."
+        ));
+    }
+
+    @Test
+    @DisplayName("Notifica una sola recuperación por encima del umbral")
+    void notificaRecuperacionAlSuperarElUmbral() {
+        InventarioService inventario = mock(InventarioService.class);
+        when(inventario.listarProductos())
+                .thenReturn(List.of(new Producto(
+                        "P-004", "Cable HDMI 2 metros", 1
+                )))
+                .thenReturn(List.of(new Producto(
+                        "P-004", "Cable HDMI 2 metros", 8
+                )))
+                .thenReturn(List.of(new Producto(
+                        "P-004", "Cable HDMI 2 metros", 8
+                )));
+
+        monitor.vincularInventario(inventario);
+        monitor.activar();
+        Runnable tarea = tareaProgramada(programador);
+
+        tarea.run();
+        tarea.run();
+        tarea.run();
+
+        assertEquals(1, mensajesDeAlerta().size());
+        assertEquals(1, mensajesDeRecuperacion().size());
+        assertTrue(mensajesDeRecuperacion().get(0).contains(
+                "Cable HDMI 2 metros (P-004) recuperó su stock normal "
+                        + "con 8 unidades disponibles."
+        ));
+    }
+
+    @Test
+    @DisplayName("Genera una nueva alerta después de recuperación y nuevo descenso")
+    void generaNuevaAlertaTrasUnaNuevaCaidaDeStock() {
+        InventarioService inventario = mock(InventarioService.class);
+        when(inventario.listarProductos())
+                .thenReturn(List.of(new Producto(
+                        "P-007", "Audífonos HyperX Cloud", 4
+                )))
+                .thenReturn(List.of(new Producto(
+                        "P-007", "Audífonos HyperX Cloud", 6
+                )))
+                .thenReturn(List.of(new Producto(
+                        "P-007", "Audífonos HyperX Cloud", 2
+                )));
+
+        monitor.vincularInventario(inventario);
+        monitor.activar();
+        Runnable tarea = tareaProgramada(programador);
+
+        tarea.run();
+        tarea.run();
+        tarea.run();
+
+        assertEquals(2, mensajesDeAlerta().size());
+        assertEquals(1, mensajesDeRecuperacion().size());
+        assertTrue(mensajesDeAlerta().get(0).contains("4 unidades"));
+        assertTrue(mensajesDeAlerta().get(1).contains("2 unidades"));
+    }
+
+    @Test
+    @DisplayName("Mantiene ciclos de alerta independientes para varios productos")
+    void administraEstadosIndependientesParaVariosProductos() {
+        InventarioService inventario = mock(InventarioService.class);
+        when(inventario.listarProductos())
+                .thenReturn(List.of(
+                        new Producto("P-002", "Mouse", 3),
+                        new Producto("P-004", "Cable", 1)
+                ))
+                .thenReturn(List.of(
+                        new Producto("P-002", "Mouse", 5),
+                        new Producto("P-004", "Cable", 1)
+                ))
+                .thenReturn(List.of(
+                        new Producto("P-002", "Mouse", 2),
+                        new Producto("P-004", "Cable", 5)
+                ));
+
+        monitor.vincularInventario(inventario);
+        monitor.activar();
+        Runnable tarea = tareaProgramada(programador);
+
+        tarea.run();
+        tarea.run();
+        tarea.run();
+
+        assertEquals(3, mensajesDeAlerta().size());
+        assertEquals(Set.of("P-002", "P-004"), mensajesDeAlerta().stream()
+                .map(this::codigoDeAlerta)
+                .collect(Collectors.toSet()));
+        assertEquals(2, mensajesDeRecuperacion().size());
+        assertTrue(mensajesDeRecuperacion().stream()
+                .anyMatch(mensaje -> mensaje.contains("P-002")));
+        assertTrue(mensajesDeRecuperacion().stream()
+                .anyMatch(mensaje -> mensaje.contains("P-004")));
+    }
+
+    @Test
     @DisplayName("No genera alertas para existencias iguales o superiores a cinco")
     void noAlertaEnElUmbralNiPorEncima() {
         InventarioService inventario = mock(InventarioService.class);
@@ -139,14 +286,15 @@ class MonitorAlertasTest {
     }
 
     @Test
-    @DisplayName("Sigue activo sin Inventario y consulta al reconectarse")
-    void continuaYSeReconectaAlServicioDeInventario() {
+    @DisplayName("Conserva el estado bajo durante la desconexión y evita duplicados")
+    void conservaAlertaActivaDuranteDesconexionYReconectaSinDuplicar() {
         InventarioService inventarioInicial = mock(InventarioService.class);
         InventarioService inventarioReconectado = mock(InventarioService.class);
-        when(inventarioInicial.listarProductos()).thenReturn(List.of());
-        when(inventarioReconectado.listarProductos()).thenReturn(List.of(
+        List<Producto> stockBajo = List.of(
                 new Producto("P-009", "Adaptador USB-C", 2)
-        ));
+        );
+        when(inventarioInicial.listarProductos()).thenReturn(stockBajo);
+        when(inventarioReconectado.listarProductos()).thenReturn(stockBajo);
 
         monitor.activar();
         Runnable tarea = tareaProgramada(programador);
@@ -166,8 +314,41 @@ class MonitorAlertasTest {
         monitor.vincularInventario(inventarioReconectado);
         tarea.run();
         verify(inventarioReconectado).listarProductos();
-        assertTrue(mensajesDeAlerta().stream()
-                .anyMatch(mensaje -> mensaje.contains("P-009")));
+        assertEquals(1, mensajesDeAlerta().size());
+        assertTrue(mensajesDeAlerta().get(0).contains("P-009"));
+        assertTrue(mensajesDeRecuperacion().isEmpty());
+    }
+
+    @Test
+    @DisplayName("Detecta recuperación ocurrida mientras Inventario estuvo desconectado")
+    void detectaRecuperacionAlReconectarElServicio() {
+        InventarioService inventarioInicial = mock(InventarioService.class);
+        InventarioService inventarioReconectado = mock(InventarioService.class);
+        when(inventarioInicial.listarProductos()).thenReturn(List.of(
+                new Producto("P-009", "Adaptador USB-C", 2)
+        ));
+        when(inventarioReconectado.listarProductos()).thenReturn(List.of(
+                new Producto("P-009", "Adaptador USB-C", 7)
+        ));
+
+        monitor.activar();
+        Runnable tarea = tareaProgramada(programador);
+        monitor.vincularInventario(inventarioInicial);
+        tarea.run();
+
+        monitor.desvincularInventario(inventarioInicial);
+        tarea.run();
+        assertTrue(mensajesDeRecuperacion().isEmpty());
+
+        monitor.vincularInventario(inventarioReconectado);
+        tarea.run();
+
+        assertEquals(1, mensajesDeAlerta().size());
+        assertEquals(1, mensajesDeRecuperacion().size());
+        assertTrue(mensajesDeRecuperacion().get(0).contains(
+                "Adaptador USB-C (P-009) recuperó su stock normal "
+                        + "con 7 unidades disponibles."
+        ));
     }
 
     @Test
@@ -192,14 +373,25 @@ class MonitorAlertasTest {
     void manejaErroresDeConsultaSinDetenerElMonitor() {
         InventarioService inventario = mock(InventarioService.class);
         when(inventario.listarProductos())
+                .thenReturn(List.of(new Producto("P-007", "Audífonos", 4)))
                 .thenThrow(new IllegalStateException("Fallo temporal"))
-                .thenReturn(List.of(new Producto("P-007", "Audífonos", 4)));
+                .thenReturn(List.of(new Producto("P-007", "Audífonos", 4)))
+                .thenReturn(List.of(new Producto("P-007", "Audífonos", 5)));
 
         monitor.activar();
         monitor.vincularInventario(inventario);
         Runnable tarea = tareaProgramada(programador);
 
         assertDoesNotThrow(tarea::run);
+        assertEquals(1, mensajesDeAlerta().size());
+
+        assertDoesNotThrow(tarea::run);
+        assertTrue(mensajesDeRecuperacion().isEmpty());
+
+        assertDoesNotThrow(tarea::run);
+        assertEquals(1, mensajesDeAlerta().size());
+        assertTrue(mensajesDeRecuperacion().isEmpty());
+
         assertDoesNotThrow(tarea::run);
 
         assertTrue(appender.list.stream().anyMatch(event ->
@@ -209,7 +401,8 @@ class MonitorAlertasTest {
         ));
         assertTrue(mensajesDeAlerta().stream()
                 .anyMatch(mensaje -> mensaje.contains("P-007")));
-        verify(inventario, times(2)).listarProductos();
+        assertEquals(1, mensajesDeRecuperacion().size());
+        verify(inventario, times(4)).listarProductos();
     }
 
     @Test
@@ -260,6 +453,43 @@ class MonitorAlertasTest {
         } finally {
             monitorReactivado.desactivar();
         }
+    }
+
+    @Test
+    @DisplayName("Evita alertas duplicadas ante revisiones concurrentes")
+    void evitaDuplicadosAnteRevisionesConcurrentes() throws Exception {
+        InventarioService inventario = mock(InventarioService.class);
+        when(inventario.listarProductos()).thenReturn(List.of(
+                new Producto("P-002", "Mouse inalámbrico Logitech", 3)
+        ));
+
+        monitor.vincularInventario(inventario);
+        monitor.activar();
+        Runnable tarea = tareaProgramada(programador);
+        CountDownLatch inicio = new CountDownLatch(1);
+        ExecutorService ejecutor = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> primeraRevision = ejecutor.submit(() -> {
+                inicio.await();
+                tarea.run();
+                return null;
+            });
+            Future<?> segundaRevision = ejecutor.submit(() -> {
+                inicio.await();
+                tarea.run();
+                return null;
+            });
+
+            inicio.countDown();
+            primeraRevision.get(5, TimeUnit.SECONDS);
+            segundaRevision.get(5, TimeUnit.SECONDS);
+        } finally {
+            inicio.countDown();
+            ejecutor.shutdownNow();
+            assertTrue(ejecutor.awaitTermination(5, TimeUnit.SECONDS));
+        }
+
+        assertEquals(1, mensajesDeAlerta().size());
     }
 
     @Test
@@ -334,6 +564,14 @@ class MonitorAlertasTest {
                 .filter(event -> event.getLevel().equals(Level.WARN))
                 .map(ILoggingEvent::getFormattedMessage)
                 .filter(mensaje -> mensaje.startsWith("ALERTA:"))
+                .toList();
+    }
+
+    private List<String> mensajesDeRecuperacion() {
+        return appender.list.stream()
+                .filter(event -> event.getLevel().equals(Level.INFO))
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(mensaje -> mensaje.startsWith("RECUPERACIÓN:"))
                 .toList();
     }
 

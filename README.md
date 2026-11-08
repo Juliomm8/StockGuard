@@ -68,9 +68,11 @@ El POM de Inventario exporta `com.stockguard.inventario.api` como paquete públi
 
 ### Bundle de Alertas
 
-`MonitorAlertas` es un componente inmediato de DS. Al activarse crea un programador de una sola hebra y ejecuta la consulta de inmediato y luego cada 10 segundos. Por cada producto con `cantidadDisponible < 5`, escribe un mensaje de nivel `WARN` mediante SLF4J. La comparación es estricta: cinco unidades no generan alerta.
+`MonitorAlertas` es un componente inmediato de DS. Al activarse crea un programador de una sola hebra y ejecuta la consulta de inmediato y luego cada 10 segundos. La comparación es estricta: cinco unidades no generan alerta.
 
-La referencia opcional y dinámica se asocia y desvincula mediante métodos de DS. Si Inventario desaparece, el monitor permanece activo y las ejecuciones programadas esperan sin consultar. Cuando el servicio vuelve a publicarse, DS vuelve a asociarlo y el monitor reanuda las consultas. Las excepciones de ejecución al consultar el servicio se registran sin cancelar el monitor.
+El monitor mantiene en memoria los códigos que ya tienen una alerta activa. Cuando un producto pasa de cinco o más unidades a menos de cinco, registra un único mensaje `WARN` con el prefijo `ALERTA:`. Las revisiones posteriores no repiten la notificación mientras el producto continúe bajo el umbral. Al observar cinco o más unidades, elimina el estado activo y registra una sola notificación `INFO` con el prefijo `RECUPERACIÓN:` y la cantidad disponible. Si vuelve a caer por debajo de cinco, comienza un nuevo ciclo de alerta.
+
+La referencia opcional y dinámica se asocia y desvincula mediante métodos de DS. Si Inventario desaparece, el monitor permanece activo y las ejecuciones programadas esperan sin consultar; el estado de alertas activas se conserva y la desconexión no se interpreta como recuperación. Cuando el servicio vuelve a publicarse, DS lo asocia de nuevo: el mismo producto bajo continúa en su ciclo sin duplicar mensajes, y una recuperación ocurrida durante la desconexión se detecta en la siguiente consulta correcta. Una consulta fallida se registra como error y no modifica los estados. La sincronización de las revisiones protege las transiciones frente a ejecuciones simultáneas.
 
 Al desactivarse, el componente borra su referencia, solicita el cierre inmediato del programador y espera su terminación hasta dos segundos. El paquete `com.stockguard.alertas.internal` es privado. Alertas importa el paquete público de Inventario con un rango de versión; el JAR de Alertas no incorpora copias de las clases de esa API.
 
@@ -183,7 +185,7 @@ Maven ejecuta el reactor en el orden definido por las dependencias: primero proc
 
 JUnit Jupiter 5 ejecuta las pruebas unitarias de ambos módulos. Mockito se usa en las pruebas de Alertas para simular el contrato de Inventario cuando se necesita controlar su comportamiento. Las dependencias de pruebas tienen alcance `test` y no se empaquetan como clases de producción en los bundles.
 
-En la fase de pruebas ya completada se informó que pasaron 18 pruebas: 9 de Inventario y 9 de Alertas. Este dato corresponde a esa validación anterior; no es una ejecución nueva de Karaf. `mvn clean verify` vuelve a ejecutar las pruebas automáticamente.
+Una validación anterior ejecutó 18 pruebas: 9 de Inventario y 9 de Alertas. La Fase 5.1 amplía la suite de Alertas; tras su validación, el proyecto cuenta con 25 pruebas (9 de Inventario y 16 de Alertas), todas ejecutadas por `mvn clean verify`. La evidencia visual de fases anteriores conserva la salida correspondiente a sus ejecuciones, no a esta suite ampliada.
 
 Los bundles generados están en:
 
@@ -304,7 +306,7 @@ El proyecto incluye dos clases de pruebas unitarias:
 | Clase | Cobertura principal |
 |---|---|
 | `InventarioServiceImplTest` | Catálogo inicial de 15 productos, orden y códigos, umbral, actualizaciones, cantidades inválidas, consistencia y acceso concurrente. |
-| `MonitorAlertasTest` | Umbral de alertas, servicio ausente/disponible, desconexión y reconexión, errores de consulta, intervalo programado y cierre/reinicio del componente. |
+| `MonitorAlertasTest` | Umbral, deduplicación, recuperación en cinco unidades y por encima, nuevo ciclo tras una caída, independencia entre productos, desconexión/reconexión, fallos de consulta, concurrencia y cierre del programador. |
 
 JUnit 5 proporciona las aserciones y el ciclo de ejecución de las pruebas. Mockito permite controlar el servicio de Inventario en los escenarios de Alertas sin iniciar Karaf. La prueba del monitor usa un programador controlado para verificar las tareas sin esperar diez segundos de reloj por cada ciclo.
 
@@ -312,7 +314,7 @@ Estas pruebas son unitarias: ejercitan componentes Java y sus contratos. La inst
 
 ## Evidencias de ejecución
 
-Las imágenes siguientes son capturas PNG de la pantalla real de VS Code y su terminal integrado. Las ejecuciones de Maven se realizaron en PowerShell; las consultas de bundles, servicios y registros se realizaron en la consola local de Apache Karaf 4.4.12. Cada imagen conserva la salida visible de su ejecución.
+Las imágenes siguientes son capturas PNG de la pantalla real de VS Code y su terminal integrado. Las ejecuciones de Maven se realizaron en PowerShell; las consultas de bundles, servicios y registros se realizaron en la consola local de Apache Karaf 4.4.12. Cada imagen conserva la salida visible de su ejecución. Las capturas corresponden a la fase anterior a la Fase 5.1; por eso, sus registros repetidos documentan el comportamiento previo y no son evidencia de la nueva deduplicación.
 
 ### Compilación y pruebas
 
@@ -373,11 +375,11 @@ Se conservan los extractos de texto de ejecuciones anteriores en `docs/capturas/
 - El inventario se almacena en memoria y no usa una base de datos.
 - La activación del componente vuelve a registrar los datos iniciales de demostración; los cambios realizados durante la ejecución no son persistentes.
 - El proyecto todavía no incluye interfaz gráfica ni API REST.
-- El monitor registra nuevamente los productos con bajo stock en cada ciclo; no hay deduplicación ni historial de alertas.
+- Los estados activos de alerta se mantienen solo en memoria y no se persisten entre reinicios de la JVM. Al iniciar un proceso nuevo, el primer ciclo vuelve a notificar los productos que sigan bajo el umbral.
 - Las existencias no se gestionan mediante una interfaz de usuario. La API del servicio permite actualizarlas desde otro componente OSGi.
 
 Estas limitaciones delimitan el alcance actual del ejemplo y no implican funciones ya implementadas.
 
 ## Posibles mejoras futuras
 
-Como extensiones independientes se podrían explorar una interfaz web, una API REST, almacenamiento persistente, un umbral configurable, deduplicación de alertas y operaciones adicionales de inventario. Ninguna de estas posibilidades forma parte de la implementación actual.
+Como extensiones independientes se podrían explorar una interfaz web, una API REST, almacenamiento persistente del inventario y del historial de alertas, un umbral configurable y operaciones adicionales de inventario. Ninguna de estas posibilidades forma parte de la implementación actual.
