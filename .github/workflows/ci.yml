@@ -1,0 +1,70 @@
+name: Validación de StockGuard
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend Java 17
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v7
+
+      - name: Configurar Java 17 y caché de Maven
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Comprobar Docker para Testcontainers
+        run: docker info
+
+      - name: Verificar y empaquetar los bundles
+        run: mvn --batch-mode --no-transfer-progress clean verify
+
+  frontend:
+    name: Frontend React y TypeScript
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v7
+
+      - name: Configurar Node.js 24 y caché de npm
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: stockguard-frontend/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: stockguard-frontend
+        run: npm ci
+
+      - name: Ejecutar pruebas de Vitest
+        working-directory: stockguard-frontend
+        run: npm test
+
+      - name: Comprobar tipos de TypeScript
+        working-directory: stockguard-frontend
+        run: npm run typecheck
+
+      - name: Ejecutar lint
+        working-directory: stockguard-frontend
+        run: npm run lint
+
+      - name: Construir el frontend
+        working-directory: stockguard-frontend
+        run: npm run build
