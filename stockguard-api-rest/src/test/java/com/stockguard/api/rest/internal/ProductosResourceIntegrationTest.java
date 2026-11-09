@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @DisplayName("Integración HTTP de la API REST de StockGuard")
@@ -148,6 +149,23 @@ class ProductosResourceIntegrationTest {
         assertTrue(movimientosProducto.body().contains("existenciaPosterior"));
         assertTrue(movimientosProducto.body().contains("12"));
         assertTrue(movimientosProducto.body().contains("Reposición"));
+    }
+
+    @Test
+    @DisplayName("Rechaza por HTTP los códigos mayores que la columna de PostgreSQL")
+    void rechazaCodigoMayorQueLongitudPersistida() throws Exception {
+        String codigo = "A".repeat(33);
+
+        HttpResponse<String> respuesta = cliente.send(
+                HttpRequest.newBuilder(URI.create(baseUrl + "/" + codigo))
+                        .GET()
+                        .build(),
+                HttpResponse.BodyHandlers.ofString()
+        );
+
+        assertEquals(400, respuesta.statusCode());
+        assertTrue(respuesta.body().contains("mensaje"));
+        verifyNoInteractions(inventario, movimientos, consultas);
     }
 
     @Test

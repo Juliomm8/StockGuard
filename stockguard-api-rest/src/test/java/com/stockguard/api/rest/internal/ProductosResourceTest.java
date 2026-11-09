@@ -89,6 +89,39 @@ class ProductosResourceTest {
     }
 
     @Test
+    @DisplayName("Acepta códigos de 32 caracteres, el máximo persistido")
+    void aceptaCodigoConLongitudMaximaPersistida() {
+        String codigo = "A".repeat(32);
+        Producto producto = new Producto(codigo, "Producto de prueba", 1);
+        when(consultas.buscarProducto(codigo)).thenReturn(Optional.of(producto));
+
+        try (Response respuesta = recurso.buscarProducto(codigo)) {
+            assertEquals(Response.Status.OK.getStatusCode(), respuesta.getStatus());
+            assertEquals(
+                    new ProductoDto(codigo, "Producto de prueba", 1),
+                    respuesta.getEntity()
+            );
+        }
+
+        verify(consultas).buscarProducto(codigo);
+    }
+
+    @Test
+    @DisplayName("Rechaza códigos de 33 caracteres antes de consultar Inventario")
+    void rechazaCodigoQueSuperaLongitudPersistida() {
+        String codigo = "A".repeat(33);
+
+        try (Response respuesta = recurso.buscarProducto(codigo)) {
+            assertEquals(
+                    Response.Status.BAD_REQUEST.getStatusCode(),
+                    respuesta.getStatus()
+            );
+        }
+
+        verifyNoInteractions(inventario, movimientos, consultas);
+    }
+
+    @Test
     @DisplayName("Registra entradas y salidas con cantidades positivas")
     void registraEntradaYSalida() {
         when(movimientos.registrarEntrada("P-001", 4)).thenReturn(true);
