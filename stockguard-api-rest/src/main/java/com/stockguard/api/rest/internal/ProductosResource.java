@@ -46,7 +46,7 @@ public class ProductosResource {
     private static final Logger LOGGER =
             LoggerFactory.getLogger(ProductosResource.class);
     private static final Pattern CODIGO_VALIDO =
-            Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{0,63}");
+            Pattern.compile("[A-Za-z0-9][A-Za-z0-9_-]{0,31}");
 
     private final AtomicReference<InventarioService> inventario =
             new AtomicReference<>();
