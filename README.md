@@ -18,6 +18,7 @@ El backend está desarrollado en Java y se ejecuta en Apache Karaf mediante tres
 - [Requisitos previos](#requisitos-previos)
 - [Instalación y ejecución](#instalación-y-ejecución)
 - [Pruebas y resultados](#pruebas-y-resultados)
+- [Integración continua con GitHub Actions](#integración-continua-con-github-actions)
 - [Evidencias de funcionamiento](#evidencias-de-funcionamiento)
 - [Comportamiento ante fallos](#comportamiento-ante-fallos)
 - [Limitaciones y mejoras futuras](#limitaciones-y-mejoras-futuras)
@@ -265,6 +266,8 @@ Un ajuste establece la existencia final solicitada y admite cero, pero no cantid
 | `503 Service Unavailable` | Inventario o su almacenamiento no están disponibles. |
 | `500 Internal Server Error` | Error no previsto. Se devuelve un mensaje genérico y los detalles se registran en Karaf. |
 
+Los códigos de producto aceptados por la API tienen un máximo de **32 caracteres**, igual que las columnas `productos.codigo` y `movimientos_inventario.codigo_producto` de PostgreSQL. Un código de 33 caracteres o más responde `400 Bad Request` antes de consultar el servicio.
+
 La API no incorpora autenticación ni una configuración CORS específica. Está pensada para el entorno local de demostración.
 
 ### Ejemplo de consulta desde PowerShell
@@ -388,7 +391,12 @@ Los siguientes pasos describen el entorno local de desarrollo en Windows y Power
 
 ### 1. Descargar el proyecto y preparar las variables
 
-Abre PowerShell en el directorio raíz del proyecto. Cuando el repositorio esté publicado en GitHub, podrás clonar esa misma carpeta desde la URL que se genere para el repositorio.
+Clona el repositorio público y entra en el directorio del proyecto:
+
+```powershell
+git clone https://github.com/Juliomm8/StockGuard.git
+cd StockGuard
+```
 
 Crea el archivo local de variables si todavía no existe:
 
@@ -399,7 +407,7 @@ if (-not (Test-Path .env)) {
 notepad .env
 ```
 
-Edita `.env` y reemplaza los valores de ejemplo por los datos locales que utilizarás. No subas este archivo a GitHub: contiene configuración privada y está excluido mediante `.gitignore`.
+Edita `.env` y reemplaza los valores de ejemplo por los datos locales que utilizarás. Este archivo lo lee Docker Compose; no configura automáticamente el entorno de PowerShell ni el proceso de Karaf. No lo subas a GitHub: está excluido mediante `.gitignore`.
 
 ### 2. Iniciar PostgreSQL
 
@@ -431,9 +439,12 @@ No utilices `docker compose down -v` si deseas conservar los datos, porque esa o
 
 El ejemplo de configuración se encuentra en `docs/configuracion/stockguard-inventario.cfg.example`.
 
-Define `KARAF_HOME` con la ruta de tu instalación de Karaf. Si el archivo de configuración todavía no existe, cópialo:
+Define `KARAF_HOME` con la ruta local de tu instalación de Karaf. Si el archivo de configuración todavía no existe, cópialo:
 
 ```powershell
+# Sustituye el marcador por la carpeta local de Apache Karaf 4.4.12.
+$env:KARAF_HOME = '<RUTA_LOCAL_DE_KARAF>'
+
 $configInventario = Join-Path $env:KARAF_HOME `
   "etc\com.stockguard.inventario.internal.InventarioServiceImpl.cfg"
 
@@ -444,7 +455,9 @@ if (-not (Test-Path $configInventario)) {
 notepad $configInventario
 ```
 
-Configura la URL y el usuario de PostgreSQL. La contraseña debe establecerse localmente mediante `STOCKGUARD_DB_PASSWORD` o mediante Config Admin en la instalación de Karaf. No guardes contraseñas reales en el repositorio.
+Configura la URL y el usuario de PostgreSQL. La contraseña puede provenir de `jdbc.password` en Config Admin; si esa propiedad falta o está vacía, el componente lee `STOCKGUARD_DB_PASSWORD` del entorno del proceso.
+
+Si utilizas la variable de entorno, establece en PowerShell el mismo valor que configuraste en el `.env` de Docker Compose, antes de iniciar Karaf y en la misma sesión. El `.env` no se importa automáticamente a PowerShell. Si `jdbc.password` está configurada, ese valor tiene prioridad sobre la variable de entorno. Mantén los archivos de configuración local fuera del repositorio y no escribas contraseñas reales en archivos versionados.
 
 La conexión utilizada por Karaf ejecutado directamente en Windows es:
 
@@ -454,9 +467,10 @@ jdbc:postgresql://localhost:5437/stockguard_db
 
 ### 4. Iniciar Karaf y preparar los servicios
 
-En PowerShell:
+Establece `STOCKGUARD_DB_PASSWORD` en la misma sesión de PowerShell desde la que iniciarás Karaf. Si abriste otra ventana después de configurar la variable, vuelve a asignarla en esa nueva sesión:
 
 ```powershell
+$env:STOCKGUARD_DB_PASSWORD = "tu_contraseña_local"
 Set-Location $env:KARAF_HOME
 .\bin\karaf.bat
 ```
@@ -497,6 +511,8 @@ karaf@root()> bundle:install -s mvn:org.postgresql/postgresql/42.7.14
 karaf@root()> service:list org.osgi.service.jdbc.DataSourceFactory
 ```
 
+La versión configurada para el proyecto es **42.7.14**: el POM de Inventario la declara como dependencia de prueba y este comando la instala en Karaf como bundle OSGi externo. No queda embebida dentro de `stockguard-inventario`. Una captura histórica muestra **42.7.3**, correspondiente a una ejecución anterior; se conserva sin cambios y no representa la versión indicada para una instalación nueva. Para comprobar una instancia concreta, localiza el bundle con `bundle:list` y consulta sus cabeceras mediante `bundle:headers <ID_DRIVER>`.
+
 ### 5. Compilar los módulos
 
 Abre otra ventana de PowerShell en la raíz del proyecto y ejecuta:
@@ -515,27 +531,41 @@ stockguard-api-rest/target/stockguard-api-rest-1.0.0-SNAPSHOT.jar
 
 ### 6. Instalar o actualizar los bundles
 
-En Karaf, ejecuta `bundle:list` y localiza los identificadores actuales por nombre simbólico. Los ID numéricos pueden cambiar entre instalaciones.
-
-Para actualizar Inventario, utiliza el ID existente:
+Los JAR generados por los POM tienen la versión `1.0.0-SNAPSHOT` y estas rutas relativas:
 
 ```text
-karaf@root()> bundle:update <ID_INVENTARIO> 'file:///ruta/local/stockguard-inventario/target/stockguard-inventario-1.0.0-SNAPSHOT.jar'
+stockguard-inventario/target/stockguard-inventario-1.0.0-SNAPSHOT.jar
+stockguard-alertas/target/stockguard-alertas-1.0.0-SNAPSHOT.jar
+stockguard-api-rest/target/stockguard-api-rest-1.0.0-SNAPSHOT.jar
 ```
 
-Si el bundle REST todavía no está instalado, instálalo una vez:
+En una instalación limpia, prepara primero PostgreSQL, la configuración JDBC, el driver y las features necesarias. Instala Inventario antes que Alertas y REST para que los contratos estén publicados cuando se inicien sus consumidores.
+
+Desde PowerShell, en la raíz del repositorio, genera comandos con URIs `file:` válidas para las rutas locales:
+
+```powershell
+$artefactos = @(
+    '.\stockguard-inventario\target\stockguard-inventario-1.0.0-SNAPSHOT.jar',
+    '.\stockguard-alertas\target\stockguard-alertas-1.0.0-SNAPSHOT.jar',
+    '.\stockguard-api-rest\target\stockguard-api-rest-1.0.0-SNAPSHOT.jar'
+)
+
+foreach ($artefacto in $artefactos) {
+    $ruta = (Resolve-Path $artefacto).Path
+    $uri = [System.Uri]::new($ruta).AbsoluteUri
+    "bundle:install -s '$uri'"
+}
+```
+
+Pega en Karaf las tres líneas generadas, en el mismo orden. Los comandos tienen esta forma:
 
 ```text
-karaf@root()> bundle:install -s 'file:///ruta/local/stockguard-api-rest/target/stockguard-api-rest-1.0.0-SNAPSHOT.jar'
+karaf@root()> bundle:install -s '<URI_FILE_GENERADA_PARA_INVENTARIO>'
+karaf@root()> bundle:install -s '<URI_FILE_GENERADA_PARA_ALERTAS>'
+karaf@root()> bundle:install -s '<URI_FILE_GENERADA_PARA_API_REST>'
 ```
 
-Si ya existe, actualiza el bundle REST utilizando su ID actual:
-
-```text
-karaf@root()> bundle:update <ID_API_REST> 'file:///ruta/local/stockguard-api-rest/target/stockguard-api-rest-1.0.0-SNAPSHOT.jar'
-```
-
-No instales copias adicionales de bundles que ya existen. Si Alertas no ha cambiado, no es necesario actualizarlo.
+Antes de instalar, ejecuta `bundle:list` y comprueba los nombres simbólicos para evitar duplicados. Si los bundles ya están instalados, conserva sus ID actuales y usa `bundle:update <ID> '<URI_FILE_GENERADA>'` solo para los artefactos que hayan cambiado. Los ID numéricos pueden cambiar entre instalaciones.
 
 ### 7. Comprobar los bundles y la API
 
@@ -543,6 +573,7 @@ En Karaf:
 
 ```text
 karaf@root()> bundle:list
+karaf@root()> bundle:services <ID_INVENTARIO>
 karaf@root()> service:list com.stockguard.inventario.api.InventarioService
 karaf@root()> service:list com.stockguard.inventario.api.InventarioMovimientosService
 karaf@root()> service:list com.stockguard.inventario.api.InventarioConsultaService
@@ -566,9 +597,14 @@ Con Karaf y la API REST activos, abre otra ventana de PowerShell:
 
 ```powershell
 Set-Location .\stockguard-frontend
+if (-not (Test-Path .env.local)) {
+    Copy-Item .env.example .env.local
+}
 npm ci
 npm run dev
 ```
+
+El archivo de ejemplo utiliza `VITE_API_BASE_URL=/api`, por lo que el navegador envía las solicitudes al proxy de Vite en el mismo origen. El proxy las reenvía al destino definido por `STOCKGUARD_PROXY_TARGET` (por defecto, `http://localhost:8181`). Cambia ese destino en `.env.local` si Karaf escucha en otra dirección. `.env.local` contiene solo configuración local y no se debe publicar.
 
 Vite mostrará la dirección local de desarrollo, normalmente:
 
@@ -580,6 +616,7 @@ Para ejecutar las comprobaciones del frontend:
 
 ```powershell
 npm test
+npm run typecheck
 npm run build
 npm run lint
 ```
@@ -588,14 +625,14 @@ npm run lint
 
 ### Pruebas automatizadas del backend
 
-La ejecución registrada de `mvn clean verify` finalizó con `BUILD SUCCESS` y **96 pruebas aprobadas**, distribuidas de la siguiente manera:
+En la validación local de esta revisión, `mvn clean verify` terminó con `BUILD SUCCESS`: se ejecutaron **99 pruebas, todas aprobadas**, distribuidas de la siguiente manera:
 
 | Módulo | Pruebas |
 |---|---:|
 | Inventario | 21 |
 | Alertas | 16 |
-| API REST | 59 |
-| **Total** | **96** |
+| API REST | 62 |
+| **Total** | **99** |
 
 Inventario utiliza Testcontainers para ejecutar pruebas de integración contra PostgreSQL real. Alertas y REST utilizan Mockito para controlar los contratos de Inventario. REST también ejecuta pruebas HTTP con un servidor CXF embebido; este servidor de pruebas no es una instancia de Karaf.
 
@@ -612,11 +649,13 @@ Las pruebas cubren, entre otros aspectos:
 
 ### Pruebas automatizadas del frontend
 
-La ejecución registrada del frontend finalizó correctamente:
+En la validación local de esta revisión, `npm ci`, las pruebas, la comprobación de tipos, lint y la compilación de producción finalizaron correctamente:
 
 - **72 pruebas aprobadas en 7 archivos.**
-- `npm run build`: correcto.
-- `npm run lint`: correcto.
+- `npm ci`: correcto; npm informó cero vulnerabilidades.
+- `npm run typecheck`: correcto (`tsc -b`).
+- `npm run lint`: correcto (`oxlint`).
+- `npm run build`: correcto (`tsc -b && vite build`).
 
 ### Pruebas manuales de API
 
@@ -641,6 +680,15 @@ Estas pruebas manuales se distinguen de las pruebas automatizadas y de la demost
 En Chrome se recorrieron el panel general, el catálogo, el detalle de producto, el historial, las alertas y los formularios de entrada, salida y ajuste.
 
 La demostración de P-002 confirmó las transiciones 3 → 6 → 3 y la actualización de la vista de stock bajo. Las validaciones de cero, cantidades negativas y salidas superiores a las existencias bloquearon la continuación desde la interfaz; no se enviaron esas operaciones inválidas al backend.
+
+## Integración continua con GitHub Actions
+
+El workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml) se ejecuta en cada `push` a `main`, en los Pull Requests dirigidos a `main` y manualmente mediante `workflow_dispatch`. GitHub presenta el resultado de backend y frontend como trabajos separados.
+
+- **Backend:** configura Java 17, usa caché de Maven y ejecuta `mvn clean verify` desde la raíz. Las pruebas de Inventario crean su propia instancia PostgreSQL 16 con Testcontainers; no requieren secretos ni una base compartida. El runner hospedado de Ubuntu proporciona Docker para esos contenedores de prueba.
+- **Frontend:** configura Node.js 24, instala el lockfile con `npm ci` y ejecuta los scripts existentes `npm test`, `npm run typecheck`, `npm run lint` y `npm run build`.
+
+El workflow no despliega la aplicación ni requiere credenciales de PostgreSQL. Un resultado satisfactorio confirma que compilan y pasan las verificaciones automatizadas definidas para ambos lados del proyecto.
 
 ## Evidencias de funcionamiento
 
@@ -716,6 +764,8 @@ StockGuard/
 ├── .gitignore
 ├── .env.example
 ├── docker-compose.yml
+├── .github/
+│   └── workflows/ci.yml
 ├── docs/
 │   ├── configuracion/
 │   │   └── stockguard-inventario.cfg.example
